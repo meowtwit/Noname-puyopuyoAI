@@ -77,3 +77,17 @@ def test_versus_info_window():
     assert t40 == (40, 70, 9, True)
     t360 = next(s for s in seen if s[0] == 360)
     assert t360[2] == 1 and not t360[3]
+
+
+def test_versus_cpp_options_and_short_match():
+    import pytest
+
+    pytest.importorskip("puyo._puyocpp")
+    from puyo.versus import MatchConfig, VersusRules, play_match
+
+    rules = VersusRules(max_hands=12)
+    small = {"width": 6, "samples": 2, "depth": 4}
+    for opts in ({}, {"crush": 1, "crush_check": 0, "crush_until": 8, "residual": 0}):
+        cfg = MatchConfig("versus_cpp", "beam_cpp", {**small, **opts}, dict(small), rules=rules)
+        r = play_match(cfg, 1)
+        assert r.error is None and r.reason in ("max_hands", "dead")

@@ -139,11 +139,34 @@ def cmd_versus(a: argparse.Namespace) -> None:
     print(f"  経過時間 {time.perf_counter() - t0:.1f} s")
 
 
+def cmd_vplay_many(a: argparse.Namespace, cfg) -> None:
+    from concurrent.futures import ProcessPoolExecutor
+
+    from .replay import write_replays_home, write_versus_index
+    from .versus import record_match
+
+    tag = time.strftime("%Y%m%d_%H%M%S")
+    outdir = Path(a.out or f"replays/versus_{cfg.ai1}_vs_{cfg.ai2}_{tag}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    tasks = [(cfg, a.seed + i, str(outdir / f"seed{a.seed + i}.html")) for i in range(a.games)]
+    with ProcessPoolExecutor(max_workers=a.jobs) as ex:
+        entries = list(ex.map(record_match, tasks))
+    names = (f"{cfg.ai1} {cfg.opts1 or ''}".strip(), f"{cfg.ai2} {cfg.opts2 or ''}".strip())
+    index = write_versus_index(entries, names, f"対戦リプレイ一覧（{tag}）", outdir / "index.html")
+    wins = sum(e["winner"] == 0 for e in entries)
+    home = write_replays_home(outdir.parent)
+    print(f"{len(entries)} 局のリプレイ: {index}  （ai1 の {wins} 勝）\nリプレイ置き場: {home}")
+    if a.open:
+        os.system(f"open '{index}'")
+
+
 def cmd_vplay(a: argparse.Namespace) -> None:
     from .replay import write_versus_replay
     from .versus import play_match
 
     cfg = _versus_config(a)
+    if a.games > 1:
+        return cmd_vplay_many(a, cfg)
     r = play_match(cfg, a.seed, record=True)
     names = [f"{cfg.ai1}（ai1）", f"{cfg.ai2}（ai2）"]
     result = "引き分け" if r.winner is None else f"{names[r.winner]} の勝ち"
@@ -220,9 +243,11 @@ def main(argv: list[str] | None = None) -> None:
     v.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
     v.set_defaults(func=cmd_versus)
 
-    vp = sub.add_parser("vplay", help="対戦を 1 局行ってリプレイ HTML を出力する")
+    vp = sub.add_parser("vplay", help="対戦のリプレイ HTML を出力する（-n で複数局＋一覧ページ）")
     _add_versus_common(vp)
-    vp.add_argument("-o", "--out")
+    vp.add_argument("-n", "--games", type=int, default=20, help="局数（既定 20。1 なら 1 局だけ）")
+    vp.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
+    vp.add_argument("-o", "--out", help="出力先（1 局ならファイル、複数ならディレクトリ）")
     vp.add_argument("--open", action="store_true")
     vp.set_defaults(func=cmd_vplay)
 

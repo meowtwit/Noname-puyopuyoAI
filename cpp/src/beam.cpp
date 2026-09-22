@@ -20,7 +20,7 @@ struct TokopuyoValue : BeamValue {
     const Evaluator& ev;
     bool endgame;
     TokopuyoValue(const BeamOptions& o, const Evaluator& e, bool end) : opt(o), ev(e), endgame(end) {}
-    double fired(int chains, int score) const override {
+    double fired(int chains, int score, const Field&) const override {
         if (chains >= opt.fire) return 1e7 + score;
         return (endgame ? 1.0 : opt.small_fire) * ev.chain_value(chains, score);
     }
@@ -104,7 +104,7 @@ void BeamAI::search(const Field& root, const std::vector<Move>& legal, const std
                 if (s.field.is_dead()) continue;
                 int first = d == 0 ? static_cast<int>(i) : node.first;
                 if (s.chain.chains) {  // 撃ったらそこで打ち切り
-                    best[first] = std::max(best[first], value.fired(s.chain.chains, s.chain.score));
+                    best[first] = std::max(best[first], value.fired(s.chain.chains, s.chain.score, s.field));
                     continue;
                 }
                 double e = ev_.eval(s.field);

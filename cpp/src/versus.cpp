@@ -9,13 +9,30 @@ namespace puyo {
 
 namespace {
 
-// 打ち返し探索の値: 送り返すおじゃま − 来るおじゃま。撃たずに降るまでの手数を使い切ったら全部受ける
+// 打ち返し探索の値: 送り返すおじゃま − 来るおじゃま ＋ 撃った後に残る連鎖（2 本目）× residual。
+// 撃たずに降るまでの手数を使い切ったら全部受ける
 struct CounterValue : BeamValue {
     int incoming, carry;
-    double w;
-    CounterValue(int in, int c, double w_) : incoming(in), carry(c), w(w_) {}
-    double fired(int, int score) const override { return ((score + carry) / OJAMA_RATE - incoming) * w; }
+    double w, residual;
+    CounterValue(int in, int c, double w_, double r) : incoming(in), carry(c), w(w_), residual(r) {}
+    double fired(int, int score, const Field& after) const override {
+        double v = (score + carry) / OJAMA_RATE - incoming;
+        if (residual > 0) v += residual * VersusAI::residual_ojama(after);
+        return v * w;
+    }
     double leaf(double e, bool last) const override { return last ? -incoming * w + e * 0.01 : BEAM_NONE; }
+};
+
+// 潰し探索の値: 条件を満たす小連鎖を撃てたら送るおじゃま。それ以外は 0（形の良さを僅かに足す）
+struct CrushValue : BeamValue {
+    int carry, min_ojama, max_chain;
+    double w;
+    CrushValue(int c, int mn, int mx, double w_) : carry(c), min_ojama(mn), max_chain(mx), w(w_) {}
+    double fired(int chains, int score, const Field&) const override {
+        int o = (score + carry) / OJAMA_RATE;
+        return chains <= max_chain && o >= min_ojama ? o * w : 0.0;
+    }
+    double leaf(double e, bool) const override { return e * 1e-6; }
 };
 
 }  // namespace
@@ -27,6 +44,13 @@ VersusOptions VersusOptions::from_map(const std::map<std::string, double>& m) {
         else if (k == "w_ojama") o.w_ojama = v;
         else if (k == "counter_need") o.counter_need = static_cast<int>(v);
         else if (k == "kill_margin") o.kill_margin = static_cast<int>(v);
+        else if (k == "residual") o.residual = v;
+        else if (k == "crush") o.crush = static_cast<int>(v);
+        else if (k == "crush_min") o.crush_min = static_cast<int>(v);
+        else if (k == "crush_max_chain") o.crush_max_chain = static_cast<int>(v);
+        else if (k == "crush_depth") o.crush_depth = static_cast<int>(v);
+        else if (k == "crush_check") o.crush_check = static_cast<int>(v);
+        else if (k == "crush_until") o.crush_until = static_cast<int>(v);
         else if (!o.beam.set(k, v)) throw std::invalid_argument("unknown option: " + k);
     }
     return o;
@@ -39,8 +63,39 @@ int VersusAI::counter_potential(const Field& opponent) const {
     return best;
 }
 
-int VersusAI::opponent_counter(const Field& opponent, const std::vector<Pair>& opp_pairs, int window) {
+std::tuple<int, double, int> VersusAI::crush_plan(const Field& field, const std::vector<Pair>& known,
+                                                 const std::array<int, 4>* remaining, const VersusContext& ctx,
+                                                 const Field& opponent) {
+    std::vector<Move> legal = legal_moves(field, known.at(0));
+    if (legal.empty()) return {-1, 0.0, 0};
+    std::vector<double> v =
+        beam_.expected_values(field, legal, known, std::max(1, opt_.crush_depth), remaining,
+                              CrushValue(ctx.carry, opt_.crush_min, opt_.crush_max_chain, opt_.w_ojama));
+    size_t arg = 0;
+    for (size_t i = 1; i < legal.size(); ++i)
+        if (v[i] > v[arg]) arg = i;
+    const double expect = v[arg] / opt_.w_ojama;
+    if (expect < opt_.crush_min) return {static_cast<int>(arg), expect, 0};
+    // 相手が返すのに使える手数: 潰しの連鎖が終わるまで ＋ 降る前の 1 手
+    if (opt_.crush_check == 0) return {static_cast<int>(arg), expect, 0};
+    const int opp_window = (opt_.crush_max_chain * ctx.chain_frames + ctx.hand_frames - 1) / ctx.hand_frames + 1;
+    return {static_cast<int>(arg), expect,
+            opponent_counter(opponent, ctx.opp_pairs, opp_window, opt_.crush_check == 1)};
+}
+
+int VersusAI::residual_ojama(const Field& field) {
+    int best = 0;
+    for_each_trigger(field, [&](const Trigger& t) { best = std::max(best, t.score / OJAMA_RATE); }, 2);
+    return best;
+}
+
+int VersusAI::opponent_counter(const Field& opponent, const std::vector<Pair>& opp_pairs, int window,
+                               bool visible_only) {
     int best = counter_potential(opponent);
+    if (visible_only) {
+        window = std::min(window, static_cast<int>(opp_pairs.size()));
+        if (window <= 0) return best;
+    }
     // 相手の手持ちが分からなければ、推測した 1 手目から探す
     std::vector<Pair> known = opp_pairs;
     if (known.empty()) known = beam_.sample_pairs(1);
@@ -48,7 +103,7 @@ int VersusAI::opponent_counter(const Field& opponent, const std::vector<Pair>& o
     if (legal.empty()) return best;
     const int depth = std::max(1, std::min(window, opt_.beam.depth));
     std::vector<double> v = beam_.expected_values(opponent, legal, known, depth, nullptr,
-                                                  CounterValue(0, 0, opt_.w_ojama));
+                                                  CounterValue(0, 0, opt_.w_ojama, 0.0));
     return std::max(best, static_cast<int>(*std::max_element(v.begin(), v.end()) / opt_.w_ojama));
 }
 
@@ -89,15 +144,23 @@ Move VersusAI::decide(const Field& field, const std::vector<Pair>& known, const 
 
     // 2. 打ち返し
     if (ctx.incoming > opt_.accept && ctx.window >= 1 && ctx.window <= opt_.beam.depth) {
-        std::vector<double> v = beam_.expected_values(field, legal, known, ctx.window, remaining,
-                                                      CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama));
+        std::vector<double> v = beam_.expected_values(
+            field, legal, known, ctx.window, remaining,
+            CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama, opt_.residual));
         size_t arg = 0;
         for (size_t i = 1; i < legal.size(); ++i)
             if (v[i] > v[arg]) arg = i;
         if (v[arg] > BEAM_NONE) return legal[arg];
     }
 
-    // 3. 組む
+    // 3. 潰し（おじゃまが来ていないときだけ）
+    if (opt_.crush && ctx.incoming == 0 && ctx.hand <= opt_.crush_until) {
+        auto [arg, expect, opp] = crush_plan(field, known, remaining, ctx, opponent);
+        // 相手が返せるなら潰さない（返されると自分が小さい連鎖しか持っていないため）
+        if (arg >= 0 && expect >= opt_.crush_min && opp < expect) return legal[arg];
+    }
+
+    // 4. 組む
     return beam_.decide(field, known, -1, remaining);
 }
 

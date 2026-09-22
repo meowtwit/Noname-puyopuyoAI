@@ -90,5 +90,6 @@ class VersusCppAI(SamplingCppAI):
             x, rot = self.impl.decide(
                 state.field.to_json(), pairs, self.remaining(state), v.incoming_total, v.window, v.carry,
                 v.opp_field.to_json(), [str(p) for p in v.opp_pairs], v.rules.hand_frames, v.rules.chain_frames,
+                state.hand,
             )
         return Move(x, rot)

@@ -35,7 +35,7 @@ struct BeamOptions {
 // 探索で付ける値
 struct BeamValue {
     virtual ~BeamValue() = default;
-    virtual double fired(int chains, int score) const = 0;       // 連鎖を撃った
+    virtual double fired(int chains, int score, const Field& after) const = 0;  // 連鎖を撃った（after: 連鎖後）
     virtual double leaf(double eval, bool last) const = 0;       // 撃っていない（last: 探索の最終手）
 };
 

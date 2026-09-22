@@ -115,10 +115,10 @@ PYBIND11_MODULE(_puyocpp, m) {
             [](VersusAI& ai, const std::vector<std::string>& cols, const std::vector<std::string>& pairs,
                std::optional<std::array<int, 4>> remaining, int incoming, int window, int carry,
                const std::vector<std::string>& opp_cols, const std::vector<std::string>& opp_pairs, int hand_frames,
-               int chain_frames) {
+               int chain_frames, int hand) {
                 Field f = Field::from_cols(cols), opp = Field::from_cols(opp_cols);
                 std::vector<Pair> ps = parse_pairs(pairs);
-                VersusContext ctx{incoming, window, carry, parse_pairs(opp_pairs), hand_frames, chain_frames};
+                VersusContext ctx{incoming, window, carry, parse_pairs(opp_pairs), hand_frames, chain_frames, hand};
                 Move mv;
                 {
                     py::gil_scoped_release release;
@@ -128,8 +128,14 @@ PYBIND11_MODULE(_puyocpp, m) {
             },
             py::arg("cols"), py::arg("pairs"), py::arg("remaining"), py::arg("incoming"), py::arg("window"),
             py::arg("carry"), py::arg("opp_cols"), py::arg("opp_pairs") = std::vector<std::string>{},
-            py::arg("hand_frames") = 40, py::arg("chain_frames") = 60)
+            py::arg("hand_frames") = 40, py::arg("chain_frames") = 60, py::arg("hand") = 0)
         .def("counter_potential", [](const VersusAI& ai, const std::vector<std::string>& opp_cols) {
             return ai.counter_potential(Field::from_cols(opp_cols));
-        });
+        })
+        .def("crush_plan", [](VersusAI& ai, const std::vector<std::string>& cols, const std::vector<std::string>& pairs,
+                              int carry, const std::vector<std::string>& opp_cols,
+                              const std::vector<std::string>& opp_pairs) {
+            VersusContext ctx{0, 0, carry, parse_pairs(opp_pairs), 40, 60};
+            return ai.crush_plan(Field::from_cols(cols), parse_pairs(pairs), nullptr, ctx, Field::from_cols(opp_cols));
+        }, "デバッグ用: (手の添字, 潰しで送れるおじゃまの見込み, 相手が返せる量の見込み)");
 }

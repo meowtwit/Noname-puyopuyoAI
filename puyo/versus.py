@@ -374,3 +374,16 @@ def format_matches(cfg: MatchConfig, rs: list[VersusResult]) -> str:
     if errors:
         lines.append(f"  !! エラー {len(errors)} 局（最初: seed={errors[0].seed}）\n{errors[0].error}")
     return "\n".join(lines)
+
+
+def record_match(args) -> dict:
+    """1 局を記録してリプレイ HTML を書き出し、一覧ページ用の要約を返す（並列実行用）。"""
+    from pathlib import Path
+
+    from .replay import write_versus_replay
+
+    cfg, seed, out = args
+    r = play_match(cfg, seed, record=True)
+    write_versus_replay(r.replay, out)
+    return {"file": Path(out).name, "seed": seed, "winner": r.winner, "reason": r.reason, "hands": r.hands,
+            "stats": [s.__dict__ for s in r.stats], "events": r.events}
