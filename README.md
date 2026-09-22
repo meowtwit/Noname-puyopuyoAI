@@ -121,7 +121,16 @@ python -m puyo tune --ai beam_cpp --space beam --trials 30 -n 100 --target 14 --
 - 終了後、上位 `--top` 個と既定値を **学習に使っていない別のシード**（`--validate` ゲーム）で再評価し、最良の `--opt ...` を表示する（学習用シードでの値は過学習で高めに出るため）
 - 探索空間は `puyo/tune.py` の `SPACES`（`eval` / `lookahead` / `beam` / `mcts`）。履歴は `results/optuna.db` に残り、同じ `--study` で再開できる
 
-例: lookahead_cpp を 10 連鎖目標で 25 試行（各 300 ゲーム、約 2 分）→ 検証用 1000 ゲームで発火率 51.0% → **62.5%**。
+例:
+- lookahead_cpp を 10 連鎖目標で 25 試行（各 300 ゲーム、約 2 分）→ 検証用 1000 ゲームで発火率 51.0% → **62.5%**
+- beam_cpp を 14 連鎖目標（60 手）で 30 試行（軽量設定 width=20・samples=4、各 100 ゲーム、約 25 分）→ 検証用 200 ゲームで 13.0% → 15.5%。
+  その重みをフル設定（width=40・samples=8）で使うと、シード 0〜199 で **30.5% → 35.0%**（中央値 12 → 13）、ただし窒息 3% → 7%
+
+  ```
+  --opt fire=14 --opt w_need=366 --opt conn2=7.5 --opt conn3=48.29 --opt w_shape=15.11 --opt w_block=1307 --opt small_fire=0.9749
+  ```
+
+注意: 目的関数を発火率だけ（`--objective rate`）にすると、「死んでもいいから一発狙い」のパラメータが選ばれる（beam で検証時の窒息率 54.5%）。既定の `safe` は窒息率を引く。
 
 ## 自作 AI の書き方
 
