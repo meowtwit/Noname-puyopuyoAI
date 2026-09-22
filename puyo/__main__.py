@@ -3,6 +3,7 @@
   python -m puyo bench --ai greedy -n 200 -j 8     # とこぷよで AI を評価
   python -m puyo play  --ai greedy --seed 3        # 1 ゲーム実行してリプレイ HTML を出力
   python -m puyo sim "..RB..\n.RRBB." --pair RB --move 3^   # 盤面から 1 手シミュレーション
+  python -m puyo tune  --ai beam_cpp --space beam --trials 30   # パラメータ自動調整（要 optuna）
 """
 
 from __future__ import annotations
@@ -100,6 +101,22 @@ def cmd_sim(a: argparse.Namespace) -> None:
         print(f"  {s.chain}連鎖: {len(s.erased)}個消去 色数{s.colors} 連結{s.groups} → {s.score}点")
 
 
+def cmd_tune(a: argparse.Namespace) -> None:
+    from .tune import tune
+
+    tune(
+        _config(a, a.games),
+        space_name=a.space,
+        trials=a.trials,
+        jobs=a.jobs,
+        objective=a.objective,
+        study_name=a.study or f"{a.ai}_{a.space}_t{a.target}",
+        storage=a.storage,
+        validate=a.validate,
+        top=a.top,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m puyo", description="ぷよぷよ AI 試験環境")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -125,6 +142,20 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--pair", required=True, help="組ぷよ（軸→子の順、例: RB）")
     s.add_argument("--move", required=True, help="軸の列と向き（^ > v <）例: 3^")
     s.set_defaults(func=cmd_sim)
+
+    t = sub.add_parser("tune", help="AI のパラメータを自動調整する（Optuna）")
+    _add_common(t)
+    t.add_argument("--space", required=True, help="探索空間: eval / lookahead / beam / mcts（puyo/tune.py）")
+    t.add_argument("--trials", type=int, default=30)
+    t.add_argument("-n", "--games", type=int, default=100, help="1 試行あたりのゲーム数")
+    t.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
+    t.add_argument("--seed", type=int, default=0)
+    t.add_argument("--objective", default="safe", choices=["safe", "rate", "chain", "score"])
+    t.add_argument("--study", help="スタディ名（同じ名前で再開できる）")
+    t.add_argument("--storage", default="results/optuna.db", help="試行履歴の SQLite（空文字でメモリのみ）")
+    t.add_argument("--validate", type=int, default=300, help="検証に使うゲーム数")
+    t.add_argument("--top", type=int, default=3, help="検証する上位の数")
+    t.set_defaults(func=cmd_tune)
 
     a = ap.parse_args(argv)
     a.func(a)

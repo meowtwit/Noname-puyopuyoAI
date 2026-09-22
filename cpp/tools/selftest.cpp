@@ -15,8 +15,10 @@
 #include <sstream>
 #include <tuple>
 
+#include "puyo/beam.hpp"
 #include "puyo/detect.hpp"
 #include "puyo/lookahead.hpp"
+#include "puyo/mcts.hpp"
 
 using namespace puyo;
 
@@ -133,6 +135,19 @@ int main(int argc, char** argv) {
         for (auto& c : cases) sink += ai.decide(c.field, c.pairs, c.hands_left).x;
         double ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count() / cases.size();
         std::printf("lookahead decide: %.2f ms/move (sink %d)\n", ms, sink % 7);
+
+        // beam / mcts は乱数を使うので速度だけ測る（既定のオプション、先頭 30 局面）
+        size_t n = std::min<size_t>(cases.size(), 30);
+        BeamAI beam(BeamOptions{}, 1);
+        t0 = clock::now();
+        for (size_t i = 0; i < n; ++i) sink += beam.decide(cases[i].field, cases[i].pairs, cases[i].hands_left, nullptr).x;
+        std::printf("beam decide (width 40, depth 10, samples 8): %.1f ms/move\n",
+                    std::chrono::duration<double, std::milli>(clock::now() - t0).count() / n);
+        MctsAI mcts(MctsOptions{}, 1);
+        t0 = clock::now();
+        for (size_t i = 0; i < n; ++i) sink += mcts.decide(cases[i].field, cases[i].pairs, cases[i].hands_left, nullptr).x;
+        std::printf("mcts decide (1500 iterations): %.1f ms/move (sink %d)\n",
+                    std::chrono::duration<double, std::milli>(clock::now() - t0).count() / n, sink % 7);
     }
     return fails ? 1 : 0;
 }

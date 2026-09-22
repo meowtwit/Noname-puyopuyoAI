@@ -60,6 +60,14 @@ public:
     bool is_dead() const { return occupied().test(3, 12); }
     bool is_empty() const { return occupied().empty(); }
     bool operator==(const Field& o) const { return p_[0] == o.p_[0] && p_[1] == o.p_[1] && p_[2] == o.p_[2]; }
+    uint64_t hash() const {
+        uint64_t h = 0x9E3779B97F4A7C15ull;
+        for (const Bits& b : p_) {
+            h = (h ^ b.lo()) * 0xBF58476D1CE4E5B9ull;
+            h = (h ^ b.hi()) * 0x94D049BB133111EBull;
+        }
+        return h ^ (h >> 31);
+    }
 
     bool is_reachable(Move m) const;
     // 置いて連鎖は起こさない。ちぎり段差を返す

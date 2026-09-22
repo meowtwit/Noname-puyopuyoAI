@@ -30,7 +30,7 @@ Python 版だけなら外部ライブラリは不要（Python 3.11+）。C++ 版
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `--ai` | greedy | `random` / `greedy` / `lookahead` / `lookahead_cpp` / `モジュール:クラス` |
+| `--ai` | greedy | `random` / `greedy` / `lookahead` / `lookahead_cpp` / `beam_cpp` / `mcts_cpp` / `モジュール:クラス` |
 | `--hands` | 50 | 最大手数 |
 | `--target` | 10 | 目標連鎖数（発火したらそのゲームは終了） |
 | `--no-stop` | – | 目標を達成しても最大手数まで続ける |
@@ -64,6 +64,14 @@ Python 版だけなら外部ライブラリは不要（Python 3.11+）。C++ 版
 
 lookahead_cpp で 1000 ゲーム（シード 0〜999）: 発火率 51.0%、中央値 10、窒息 1.4%（8 秒）。
 
+見えないツモを推測して読む AI（C++ のみ、既定のオプション、シード 0〜199 の 200 ゲーム）:
+
+| AI | 目標 10 連鎖（50 手）発火率 | 目標 14 連鎖（60 手、`fire=14`）発火率 | 思考時間 |
+|---|---|---|---|
+| lookahead_cpp | 51% | 1.8%（中央値 10） | 1.5 ms/手 |
+| **beam_cpp** | **99.5%**（窒息 0%） | **30.5%**（中央値 12、窒息 3%） | 約 180 ms/手 |
+| mcts_cpp（`small_fire=0`） | 63% | – | 約 90 ms/手 |
+
 ### lookahead（`puyo/ai/lookahead.py`）
 
 - 手持ち＋NEXT1＋NEXT2 の 3 手を全探索し、**見えているツモだけで発火できる最大連鎖** を求める
@@ -73,6 +81,47 @@ lookahead_cpp で 1000 ゲーム（シード 0〜999）: 発火率 51.0%、中�
 - 目標（`fire`、既定 10）以上の連鎖が今撃てるなら撃つ。それ未満は撃たずに温存して伸ばす
 - 窒息が近いとき、または残り手数が見えている範囲で尽きるときは、その時点の最大連鎖を撃つ
 - パラメータは `--opt w_shape=3` のように変更できる（一覧はファイル冒頭の docstring）
+
+### beam_cpp（`cpp/src/beam.cpp`）: 見えないツモの期待値ビームサーチ
+
+1. NEXT2 より先のツモを `samples` 通り推測する（下の「ツモの推測」）
+2. それぞれのツモ列で幅 `width`・深さ `depth` のビームサーチ。連鎖が起きた枝はそこで打ち切ってその連鎖を記録し、起きなければ評価関数（連鎖検出＋形）の上位 `width` 個を残す。同じ盤面は 1 つにまとめる
+3. 初手ごとに「子孫が到達した最大の評価」を記録し、ツモ列全体で平均した期待値が最大の初手を選ぶ
+4. 目標（`fire`）以上が今撃てるなら撃つ。残り手数が探索の深さ以内なら、撃った連鎖だけを評価する
+
+オプション: `width`（40）`depth`（10）`samples`（8）`fire`（10）`small_fire`（1.0：目標未満の連鎖を撃ったときの割引）＋評価関数の重み
+
+### mcts_cpp（`cpp/src/mcts.cpp`）: open-loop MCTS
+
+- 反復ごとに先のツモを推測し直し、木は「手の並び」だけで持つ（ツモが違っても同じ手の統計を共有）
+- ノードを展開するときに全ての子を評価関数で採点し、事前値として 1 回分の訪問に混ぜる。反復の値はその最大値
+- progressive widening（`pw_k`・`pw_alpha`）で事前値の上位の手から少しずつ候補を広げ、木を深くする
+- 目標未満の連鎖を撃った値は `small_fire`（既定 0.1）で割り引く。割り引かないと「読むほど小連鎖を撃ちたがる」（撃った連鎖は確定値、伸ばす価値はツモの平均で低めに出るため）
+- オプション: `iterations`（1500）`depth`（12）`c`（1.0）`pw_k`（2）`pw_alpha`（0.5）`small_fire`（0.1）`fire`（10）＋評価関数の重み
+
+### ツモの推測（`cpp/include/puyo/sampler.hpp`）
+
+AC 通は 128 手で各色 64 個なので、AI はこれまでに見たツモを数え、今の周期で残っている色から非復元抽出で引く（`--opt tsumo_model=ac`、既定）。`tsumo_model=uniform` なら各色 1/4 の独立抽選。
+
+### 評価関数（`cpp/src/eval.cpp`）
+
+3 つの AI で共通。`eval = 連鎖検出の最大値（連鎖数×w_chain＋得点/100−足りない個数×w_need）＋形（conn2・conn3 の加点、U 字からのずれ²×w_shape と通路を塞ぐ形×w_block の減点）`。
+
+## パラメータ自動調整（`python -m puyo tune`）
+
+Optuna（TPE）で AI のオプションを調整する（`pip install optuna`）。
+
+```sh
+# beam を 14 連鎖目標で調整。--opt で渡したものは固定し、それ以外（探索空間 beam）を探す
+python -m puyo tune --ai beam_cpp --space beam --trials 30 -n 100 --target 14 --hands 60 \
+    --opt fire=14 --opt width=20 --opt samples=4
+```
+
+- 全試行で同じシードを使い、パラメータの差だけを比べる。1 試行目は既定値
+- 終了後、上位 `--top` 個と既定値を **学習に使っていない別のシード**（`--validate` ゲーム）で再評価し、最良の `--opt ...` を表示する（学習用シードでの値は過学習で高めに出るため）
+- 探索空間は `puyo/tune.py` の `SPACES`（`eval` / `lookahead` / `beam` / `mcts`）。履歴は `results/optuna.db` に残り、同じ `--study` で再開できる
+
+例: lookahead_cpp を 10 連鎖目標で 25 試行（各 300 ゲーム、約 2 分）→ 検証用 1000 ゲームで発火率 51.0% → **62.5%**。
 
 ## 自作 AI の書き方
 
@@ -155,11 +204,17 @@ puyo/
   viewer.html リプレイビューア（← → でフレーム、↑ ↓ で手、Space で再生）
   ai/         random（下限）、greedy（1 手読み）、lookahead（見えているツモ＋仮想連鎖検出で評価）
   ai/lookahead_cpp.py  C++ 版 lookahead の呼び出し
+  ai/sampling_cpp.py   beam_cpp / mcts_cpp の呼び出し（ツモの数え上げ）
+  tune.py              パラメータ自動調整
 cpp/
   include/puyo/bits.hpp   ビットボード（SIMD バックエンドの切り替え）
   src/field.cpp           設置・連鎖・得点
   src/detect.cpp          連鎖の検出
+  src/eval.cpp            評価関数（3 つの AI で共通）
   src/lookahead.cpp       lookahead AI
+  src/beam.cpp            期待値ビームサーチ
+  src/mcts.cpp            open-loop MCTS
+  include/puyo/sampler.hpp  見えないツモの推測
   src/bindings.cpp        pybind11 モジュール
   tools/selftest.cpp      C++ 単体テスト＆ベンチ
 scripts/build_cpp.py      C++ のビルド（全 OS 共通）
