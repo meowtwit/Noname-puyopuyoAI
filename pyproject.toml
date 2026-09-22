@@ -7,6 +7,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest"]
+cpp = ["pybind11>=2.12", "cmake>=3.18"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

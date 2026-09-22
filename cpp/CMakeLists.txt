@@ -1,0 +1,86 @@
+cmake_minimum_required(VERSION 3.18)
+project(puyo_cpp LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+# SIMD の選択
+#   AUTO     : x86_64 なら AVX2、それ以外（Apple Silicon など）は PORTABLE
+#   AVX2     : AVX2 + BMI2（Haswell 以降 / Zen 以降）。Windows なら /arch:AVX2
+#   SSE2     : x86_64 の基本命令のみ
+#   NATIVE   : ビルドしたマシンに最適化（GCC/Clang のみ）
+#   PORTABLE : SIMD を使わない
+#   SIMDE    : 検証用。SIMDe で AVX2 の経路を ARM などでエミュレートする（-DPUYO_SIMDE_DIR=<simde の場所>）
+set(PUYO_SIMD "AUTO" CACHE STRING "AUTO / AVX2 / SSE2 / NATIVE / PORTABLE / SIMDE")
+set(PUYO_SIMDE_DIR "" CACHE PATH "SIMDe のソース（PUYO_SIMD=SIMDE のとき）")
+option(PUYO_BUILD_PYTHON "Python モジュールをビルドする" ON)
+set(PUYO_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../puyo" CACHE PATH "Python モジュールの出力先")
+
+set(_simd "${PUYO_SIMD}")
+if(_simd STREQUAL "AUTO")
+  set(_arch "${CMAKE_SYSTEM_PROCESSOR}")
+  if(CMAKE_OSX_ARCHITECTURES)
+    set(_arch "${CMAKE_OSX_ARCHITECTURES}")
+  endif()
+  if(_arch MATCHES "^(x86_64|AMD64|amd64|x64)$")
+    set(_simd "AVX2")
+  else()
+    set(_simd "PORTABLE")
+  endif()
+endif()
+message(STATUS "puyo: SIMD = ${_simd}")
+
+set(PUYO_FLAGS "")
+set(PUYO_DEFS "")
+if(_simd STREQUAL "AVX2")
+  if(MSVC)
+    set(PUYO_FLAGS /arch:AVX2)
+  else()
+    set(PUYO_FLAGS -mavx2 -mbmi2 -mpopcnt)
+  endif()
+elseif(_simd STREQUAL "SSE2")
+  if(NOT MSVC)
+    set(PUYO_FLAGS -msse2)
+  endif()
+elseif(_simd STREQUAL "NATIVE")
+  set(PUYO_FLAGS -march=native)
+elseif(_simd STREQUAL "PORTABLE")
+  set(PUYO_DEFS PUYO_FORCE_PORTABLE)
+elseif(_simd STREQUAL "SIMDE")
+  if(NOT PUYO_SIMDE_DIR)
+    message(FATAL_ERROR "PUYO_SIMD=SIMDE には -DPUYO_SIMDE_DIR=<simde の場所> が必要")
+  endif()
+  set(PUYO_DEFS PUYO_SIMDE_AVX2)
+else()
+  message(FATAL_ERROR "unknown PUYO_SIMD: ${PUYO_SIMD}")
+endif()
+
+if(MSVC)
+  add_compile_options(/utf-8 /W3 /O2)
+else()
+  add_compile_options(-Wall -Wextra -O3)
+endif()
+
+add_library(puyocore STATIC src/field.cpp src/detect.cpp src/lookahead.cpp)
+target_include_directories(puyocore PUBLIC include)
+if(_simd STREQUAL "SIMDE")
+  target_include_directories(puyocore PUBLIC ${PUYO_SIMDE_DIR})
+endif()
+target_compile_options(puyocore PUBLIC ${PUYO_FLAGS})
+target_compile_definitions(puyocore PUBLIC ${PUYO_DEFS})
+
+add_executable(selftest tools/selftest.cpp)
+target_link_libraries(selftest PRIVATE puyocore)
+
+if(PUYO_BUILD_PYTHON)
+  find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+  find_package(pybind11 CONFIG REQUIRED)
+  pybind11_add_module(_puyocpp src/bindings.cpp)
+  target_link_libraries(_puyocpp PRIVATE puyocore)
+  # 構成ごとのサブディレクトリを作らず puyo/ に直接出力する
+  set_target_properties(_puyocpp PROPERTIES LIBRARY_OUTPUT_DIRECTORY "$<1:${PUYO_OUTPUT_DIR}>")
+endif()

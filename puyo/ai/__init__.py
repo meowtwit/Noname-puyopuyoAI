@@ -13,6 +13,7 @@ BUILTIN = {
     "random": "puyo.ai.random_ai:RandomAI",
     "greedy": "puyo.ai.greedy:GreedyAI",
     "lookahead": "puyo.ai.lookahead:LookaheadAI",
+    "lookahead_cpp": "puyo.ai.lookahead_cpp:LookaheadCppAI",
 }
 
 

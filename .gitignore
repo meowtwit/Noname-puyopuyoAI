@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 replays/
 results/
+build/
+puyo/_puyocpp*.so
+puyo/_puyocpp*.pyd

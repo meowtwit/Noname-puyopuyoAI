@@ -11,7 +11,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest        # ルール実装のテスト
 ```
 
-外部ライブラリは不要（Python 3.11+）。
+Python 版だけなら外部ライブラリは不要（Python 3.11+）。C++ 版（高速）は下の「C++ 版」を参照。
 
 ## 使い方
 
@@ -30,7 +30,7 @@ python3 -m venv .venv
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `--ai` | greedy | `random` / `greedy` / `lookahead` / `モジュール:クラス` |
+| `--ai` | greedy | `random` / `greedy` / `lookahead` / `lookahead_cpp` / `モジュール:クラス` |
 | `--hands` | 50 | 最大手数 |
 | `--target` | 10 | 目標連鎖数（発火したらそのゲームは終了） |
 | `--no-stop` | – | 目標を達成しても最大手数まで続ける |
@@ -60,6 +60,9 @@ python3 -m venv .venv
 | greedy | 0% | 2 | 0.6 ms/手 |
 | lookahead（detect_depth=0：見えているツモのみ） | 25% | 9 | 約 140 ms/手 |
 | lookahead（既定：仮想連鎖検出あり） | 49% | 9（平均 9.0、窒息 1%） | 約 540 ms/手 |
+| lookahead_cpp（C++ 版。上と全ゲーム同一結果） | 49% | 9 | **1.5 ms/手** |
+
+lookahead_cpp で 1000 ゲーム（シード 0〜999）: 発火率 51.0%、中央値 10、窒息 1.4%（8 秒）。
 
 ### lookahead（`puyo/ai/lookahead.py`）
 
@@ -93,6 +96,52 @@ class MyAI(AI):
 - `simulate(field, pair, move)` → `(置いて連鎖した後の Field, ChainResult, ちぎり段差)`（非破壊）
 - `Field.parse("...")` で書籍表記（上の段から `R G B Y O .`、改行か `/` 区切り）の盤面を作れる
 
+## C++ 版（ビットボード）
+
+`cpp/` にコア（フィールド・連鎖・検出）と lookahead AI の C++20 実装がある。Python 版と **同じ入力なら同じ結果・同じ手** になるように作ってあり、テストで常に突き合わせている。
+
+- フィールドは書籍 3 章と同じ 128bit（8 列 × 16 段）× 3 面の色コード
+- 消去判定は隣接数のビット演算で「4 つ以上つながる種」を求めて広げる（puyoai の vanishingSeed と同じ考え方）
+- SIMD はビルド時に選択:
+
+| `--simd` | 用途 | 中身 |
+|---|---|---|
+| `AVX2`（x86_64 の既定） | Windows / Linux の本番 | 128bit 面は `__m128i`、4 色の消去判定は `__m256i` で 2 色ずつ同時に。落下は BMI2 `pext` |
+| `SSE2` | 古い x86_64 | `__m128i` のみ |
+| `PORTABLE`（ARM の既定） | Apple Silicon など | `uint64_t × 2` |
+| `SIMDE` | 検証用 | SIMDe で AVX2 の経路を ARM 上でエミュレート |
+
+速度の目安（M1）: `simulate` 約 70 ns/回（Python 版の 50〜1000 倍）、lookahead 1 手 約 1 ms（Python 版の約 500 倍）。
+
+### ビルド（macOS / Linux）
+
+```sh
+.venv/bin/pip install pybind11
+.venv/bin/python scripts/build_cpp.py --selftest   # puyo/_puyocpp.* ができ、C++ 単体テストも走る
+.venv/bin/python -m pytest                         # Python 版との一致テスト（tests/test_cpp.py）を含む
+.venv/bin/python -m puyo bench --ai lookahead_cpp -n 1000
+```
+
+### ビルド（Windows・AVX2）
+
+事前に Visual Studio 2022（「C++ によるデスクトップ開発」）と Python 3.11+ を入れる。CMake は VS 付属のものか `pip install cmake` で入れたもの。
+
+```powershell
+py -m venv .venv
+.venv\Scripts\pip install pytest pybind11 cmake
+.venv\Scripts\python scripts\build_cpp.py --selftest    # x64 なら自動で AVX2（/arch:AVX2）
+.venv\Scripts\python -m pytest
+.venv\Scripts\python -m puyo bench --ai lookahead_cpp -n 1000
+```
+
+`selftest` の 1 行目が `backend: avx2+bmi2`、2 行目が `OK (0 failures)` になれば、AVX2 版が Python 版と同じ動きをしている。
+
+### 検証のしくみ
+
+- `scripts/gen_fixtures.py` が Python 版の結果から正解データ `tests/fixtures/cpp_fixtures.txt`（simulate 約 7800 件・detect 約 1700 件・lookahead の判断 256 件）を作る
+- `selftest`（C++ のみ）がその正解データと照合する。Python を変えたら fixtures を作り直す
+- macOS 上での確認状況: portable（arm64）・SSE2（Rosetta 上の x86_64）・AVX2（SIMDe でのエミュレーション）で全件一致。BMI2 `pext` の実機動作は Windows で `selftest` を実行して確認する
+
 ## 構成
 
 ```
@@ -105,8 +154,18 @@ puyo/
   replay.py   リプレイ JSON / HTML 出力
   viewer.html リプレイビューア（← → でフレーム、↑ ↓ で手、Space で再生）
   ai/         random（下限）、greedy（1 手読み）、lookahead（見えているツモ＋仮想連鎖検出で評価）
+  ai/lookahead_cpp.py  C++ 版 lookahead の呼び出し
+cpp/
+  include/puyo/bits.hpp   ビットボード（SIMD バックエンドの切り替え）
+  src/field.cpp           設置・連鎖・得点
+  src/detect.cpp          連鎖の検出
+  src/lookahead.cpp       lookahead AI
+  src/bindings.cpp        pybind11 モジュール
+  tools/selftest.cpp      C++ 単体テスト＆ベンチ
+scripts/build_cpp.py      C++ のビルド（全 OS 共通）
+scripts/gen_fixtures.py   C++ 検証用の正解データを Python 版から作る
 examples/my_ai.py  自作 AI のテンプレート
-tests/            ルール実装のテスト
+tests/            ルール実装のテスト、Python 版と C++ 版の一致テスト
 ```
 
 ## ルールの実装範囲と簡略化
@@ -118,4 +177,5 @@ tests/            ルール実装のテスト
 
 ## 速度の目安
 
-素の Python 実装で 1 手のシミュレーションが、発火しない手は約 4µs（置いたぷよが 4 つつながらなければ連鎖処理を省略）、5 連鎖で約 80µs。ビームサーチなどで足りなくなったら、`core.py` をビットボード化・Rust/C 拡張化する。
+Python 版: 1 手のシミュレーションが、発火しない手で約 4µs（置いたぷよが 4 つつながらなければ連鎖処理を省略）、5 連鎖で約 80µs。
+C++ 版: 約 70 ns（上の「C++ 版」を参照）。探索を重くする AI は C++ 側で書き、Python 版はルールの基準実装・テスト用として残す。
