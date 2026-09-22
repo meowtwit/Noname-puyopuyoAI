@@ -34,3 +34,14 @@ def test_builtin_ais_run():
     for name in ("random", "greedy", "lookahead"):
         rec, _ = run_game(BenchConfig(ai=name, max_hands=8), game_seed=1)
         assert rec.error is None and rec.hands == 8
+
+
+def test_lookahead_avoids_blocking_itself():
+    # 3 列目以外が埋まりかけ。次の組ぷよで詰む手は選ばない
+    rows = ["......"] + ["BR.GYB" if i % 2 else "RB.YGR" for i in range(11)]
+    f = Field.parse("\n".join(rows))
+    ai = load_ai_class("lookahead")()
+    move = ai.decide(_state(f, ["RY", "GB", "YY"]))
+    f2 = f.copy()
+    f2.place(Pair.parse("RY"), move)
+    assert not f2.is_dead()

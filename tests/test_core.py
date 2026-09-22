@@ -138,3 +138,12 @@ def test_tsumo_classic16_balanced():
         block = [gen.get(i) for i in range(16 * k, 16 * (k + 1))]
         cnt = Counter(c for p in block for c in (p.axis, p.child))
         assert set(cnt.values()) == {8}
+
+
+def test_detect_triggers_finds_book_stairs():
+    from puyo.detect import detect_triggers
+
+    f = Field.parse("ORBYG./RBYGR./RBYGR./RBYGR.")
+    best = max(detect_triggers(f), key=lambda t: t.chains)
+    assert (best.x, best.color, best.need, best.chains) == (6, Color.RED, 1, 5)
+    assert f == Field.parse("ORBYG./RBYGR./RBYGR./RBYGR.")  # 元の盤面は変更しない

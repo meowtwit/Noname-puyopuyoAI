@@ -17,11 +17,18 @@
   w_shape  理想形（U 字）からのずれ²の係数（既定 8）
   w_tear   ちぎり 1 段あたりの減点（既定 5）
   danger   この個数以上ぷよがあれば危険とみなす（既定 54）
+  detect_depth  仮想の連鎖検出（色ぷよを足して起きる連鎖）を何手目の盤面まで行うか
+                0=使わない, 1=今の手の後, 2=NEXT1 の後まで（既定 2）
+  w_need   仮想連鎖で足りないぷよ 1 個あたりの減点（既定 250）
+  w_block  2〜5 列目が 12 段以上（通路を塞ぐ）1 列あたりの減点（既定 1500）
+
+ポテンシャル = max(見えているツモで実際に撃てる連鎖, 色ぷよを足せば起きる連鎖 − 足りない個数の減点)
 """
 
 from __future__ import annotations
 
 from ..core import VISIBLE_HEIGHT, WIDTH, Color, Field, Move, Pair, simulate
+from ..detect import detect_triggers
 from ..game import GameState
 from .base import AI
 
@@ -44,6 +51,9 @@ class LookaheadAI(AI):
         self.w_shape = float(o.get("w_shape", 8))
         self.w_tear = float(o.get("w_tear", 5))
         self.danger = int(o.get("danger", 54))
+        self.detect_depth = int(o.get("detect_depth", 2))
+        self.w_need = float(o.get("w_need", 250))
+        self.w_block = float(o.get("w_block", 1500))
 
     # ------------------------------------------------------------------
 
@@ -68,7 +78,11 @@ class LookaheadAI(AI):
                     val = -1e6 + chain.score  # 小連鎖の暴発は避ける
             else:
                 pc, ps = self.potential(f1, pairs[1:])
-                val = self.chain_value(pc, ps) + self.shape(f1) - self.w_tear * tear
+                pot = max(self.chain_value(pc, ps), self.virtual(f1, pairs[1:], self.detect_depth))
+                val = pot + self.shape(f1) - self.w_tear * tear
+                if len(pairs) > 1 and not self.survivable(f1, pairs[1]):
+                    val -= 1e5  # 次の組ぷよで詰む
+
             if val > best_val:
                 best_move, best_val = move, val
         return best_move or state.legal_moves()[0]
@@ -96,7 +110,37 @@ class LookaheadAI(AI):
                 best = cand
         return best
 
+    def virtual(self, field: Field, pairs: list[Pair], depth: int) -> float:
+        """色ぷよを足せば起きる連鎖の評価値。depth 手先の盤面まで調べて最大を取る。"""
+        if depth <= 0:
+            return 0.0
+        best = max(
+            (
+                self.chain_value(t.chains, t.score) - self.w_need * t.need
+                for t in detect_triggers(field)
+                if field.is_reachable(Move(t.x, 0))  # 起爆点に組ぷよが届くこと
+            ),
+            default=0.0,
+        )
+        if depth >= 2 and pairs:
+            pair, rest = pairs[0], pairs[1:]
+            for move in field.legal_moves(pair):
+                f, chain, _ = simulate(field, pair, move)
+                if chain.chains or f.is_dead():
+                    continue
+                best = max(best, self.virtual(f, rest, depth - 1))
+        return best
+
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def survivable(field: Field, pair: Pair) -> bool:
+        """pair を死なずに置ける手があるか。"""
+        for move in field.legal_moves(pair):
+            f, _, _ = simulate(field, pair, move)
+            if not f.is_dead():
+                return True
+        return False
 
     def in_danger(self, field: Field) -> bool:
         return field.count() >= self.danger or field.height(3) >= 10
@@ -120,6 +164,7 @@ class LookaheadAI(AI):
         hs = field.heights()
         avg = sum(hs) / WIDTH
         score -= self.w_shape * sum((h - avg - u) ** 2 for h, u in zip(hs, U_SHAPE))
+        score -= self.w_block * sum(h >= 12 for h in hs[1:5])  # 通路を塞ぐと移動できなくなる
         return score
 
     @staticmethod
