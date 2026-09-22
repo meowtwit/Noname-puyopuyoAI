@@ -1,0 +1,12 @@
+[project]
+name = "puyopuyo-ai"
+version = "0.1.0"
+description = "ぷよぷよ（通ルール）で 10 連鎖を目指す AI の試験環境"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

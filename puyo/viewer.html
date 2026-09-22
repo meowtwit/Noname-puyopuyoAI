@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ぷよぷよ リプレイ</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1e2129; --text: #e7e9ee; --muted: #8a90a0; --line: #2d313c;
+    --R: #e8464b; --G: #3fbf5a; --B: #3f7fe8; --Y: #f0c93a; --O: #b9bcc6; --accent: #f0c93a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: auto 1fr; }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; } }
+  h1 { font-size: 16px; margin: 0 0 4px; grid-column: 1 / -1; }
+  .sub { color: var(--muted); font-size: 12px; grid-column: 1 / -1; margin-top: -12px; }
+  .board { display: flex; gap: 12px; align-items: flex-start; }
+  .field { display: grid; grid-template-columns: repeat(6, 32px); grid-template-rows: repeat(13, 32px); gap: 2px;
+           background: var(--panel); padding: 6px; border-radius: 8px; border: 1px solid var(--line); }
+  .cell { border-radius: 50%; position: relative; }
+  .cell.row13 { opacity: .45; }
+  .cell.row13::after { content: ""; position: absolute; inset: 0; border-bottom: 1px dashed var(--line); border-radius: 0; }
+  .cell.death { box-shadow: inset 0 0 0 2px #e8464b55; }
+  .cell.death::before { content: "×"; position: absolute; inset: 0; display: grid; place-items: center; color: #e8464b88; font-weight: bold; }
+  .p-R { background: var(--R); } .p-G { background: var(--G); } .p-B { background: var(--B); }
+  .p-Y { background: var(--Y); } .p-O { background: var(--O); border-radius: 30%; }
+  .cell.erase { animation: blink .25s alternate infinite; box-shadow: 0 0 0 2px #fff; }
+  .cell.placed { box-shadow: 0 0 0 2px #fff8; }
+  @keyframes blink { to { opacity: .25; } }
+  .side { display: grid; gap: 10px; min-width: 64px; }
+  .next { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px; display: grid; gap: 2px; justify-items: center; }
+  .next .lbl { font-size: 11px; color: var(--muted); }
+  .next .cell { width: 24px; height: 24px; }
+  .info { display: grid; gap: 12px; align-content: start; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .stat .k { color: var(--muted); font-size: 11px; } .stat .v { font-size: 20px; font-variant-numeric: tabular-nums; }
+  .chainbig { font-size: 28px; font-weight: 700; color: var(--accent); min-height: 40px; }
+  .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  button, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  input[type=range] { width: 100%; }
+  .hands { display: flex; flex-wrap: wrap; gap: 3px; }
+  .hands span { width: 22px; height: 22px; display: grid; place-items: center; font-size: 10px; border-radius: 4px; background: var(--panel); border: 1px solid var(--line); cursor: pointer; }
+  .hands span.c { background: #3a3320; border-color: var(--accent); color: var(--accent); font-weight: 700; }
+  .hands span.cur { outline: 2px solid var(--text); }
+  .hint { color: var(--muted); font-size: 12px; }
+  .drop { border: 1px dashed var(--line); border-radius: 8px; padding: 10px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">ぷよぷよ リプレイ</h1>
+  <div class="sub" id="subtitle"></div>
+  <div class="board">
+    <div class="field" id="field"></div>
+    <div class="side">
+      <div class="next"><div class="lbl">現在</div><div id="cur"></div></div>
+      <div class="next"><div class="lbl">NEXT</div><div id="n1"></div></div>
+      <div class="next"><div class="lbl">NEXT2</div><div id="n2"></div></div>
+    </div>
+  </div>
+  <div class="info">
+    <div class="chainbig" id="chainbig"></div>
+    <div class="stats">
+      <div class="stat"><div class="k">手数</div><div class="v" id="s-hand">-</div></div>
+      <div class="stat"><div class="k">置き方</div><div class="v" id="s-move">-</div></div>
+      <div class="stat"><div class="k">この手の連鎖 / 得点</div><div class="v" id="s-chain">-</div></div>
+      <div class="stat"><div class="k">累計得点</div><div class="v" id="s-total">-</div></div>
+      <div class="stat"><div class="k">思考時間</div><div class="v" id="s-think">-</div></div>
+    </div>
+    <div class="controls">
+      <button id="b-first" title="Home">⏮</button>
+      <button id="b-prevh" title="↑ 前の手">◀◀</button>
+      <button id="b-prev" title="← 前のフレーム">◀</button>
+      <button id="b-play" title="Space 再生/停止">▶</button>
+      <button id="b-next" title="→ 次のフレーム">▶</button>
+      <button id="b-nexth" title="↓ 次の手">▶▶</button>
+      <button id="b-maxc" title="最大連鎖の手へ">最大連鎖へ</button>
+      <select id="speed"><option value="600">遅い</option><option value="300" selected>普通</option><option value="120">速い</option></select>
+    </div>
+    <input type="range" id="slider" min="0" value="0">
+    <div class="hands" id="hands"></div>
+    <div class="hint">← → フレーム / ↑ ↓ 手 / Space 再生。連鎖した手は黄色。</div>
+    <div class="drop" id="drop">別のリプレイ JSON をここにドロップして開けます</div>
+  </div>
+</main>
+<script>
+const EMBEDDED = /*__REPLAY_DATA__*/null;
+let R = null, frames = [], idx = 0, timer = null;
+
+const $ = (id) => document.getElementById(id);
+const fieldEl = $("field");
+const cells = {};
+for (let y = 13; y >= 1; y--) for (let x = 1; x <= 6; x++) {
+  const d = document.createElement("div");
+  d.className = "cell" + (y === 13 ? " row13" : "") + (x === 3 && y === 12 ? " death" : "");
+  fieldEl.appendChild(d); cells[x + "," + y] = d;
+}
+
+function pairEl(el, pair) {
+  el.innerHTML = "";
+  if (!pair) return;
+  for (const c of [pair[1], pair[0]]) { const d = document.createElement("div"); d.className = "cell p-" + c; el.appendChild(d); }
+}
+
+function load(replay) {
+  R = replay; frames = [];
+  R.steps.forEach((st, h) => st.frames.forEach((f, i) => frames.push({ h, i, ...f })));
+  $("title").textContent = `ぷよぷよ リプレイ — ${R.ai} (seed ${R.seed})`;
+  $("subtitle").textContent = `ツモ: ${R.tsumo_mode} / ${R.steps.length} 手 / 最大 ${R.max_chain} 連鎖 / 累計 ${R.total_score} 点`;
+  $("slider").max = frames.length - 1;
+  const hands = $("hands"); hands.innerHTML = "";
+  R.steps.forEach((st, h) => {
+    const s = document.createElement("span");
+    s.textContent = st.chain ? st.chain : h + 1;
+    if (st.chain) s.className = "c";
+    s.title = `${h + 1}手目 ${st.pair} ${st.move.str}` + (st.chain ? ` ${st.chain}連鎖 ${st.score}点` : "");
+    s.onclick = () => gotoHand(h);
+    hands.appendChild(s);
+  });
+  idx = 0; render();
+}
+
+function render() {
+  if (!R || !frames.length) return;
+  const fr = frames[idx], st = R.steps[fr.h];
+  const erase = new Set(fr.erase.map(([x, y]) => x + "," + y));
+  const placedSet = new Set();
+  if (fr.i === 0) {
+    const m = st.move, cx = m.x + (m.rot === 1 ? 1 : m.rot === 3 ? -1 : 0);
+    const col = (x) => fr.field[x - 1].length;
+    if (m.rot === 0 || m.rot === 2) { placedSet.add(`${m.x},${col(m.x)}`); placedSet.add(`${m.x},${col(m.x) - 1}`); }
+    else { placedSet.add(`${m.x},${col(m.x)}`); placedSet.add(`${cx},${col(cx)}`); }
+  }
+  for (let x = 1; x <= 6; x++) for (let y = 1; y <= 13; y++) {
+    const k = x + "," + y, c = fr.field[x - 1][y - 1];
+    const d = cells[k];
+    d.className = "cell" + (y === 13 ? " row13" : "") + (x === 3 && y === 12 && !c ? " death" : "") +
+      (c ? " p-" + c : "") + (erase.has(k) ? " erase" : "") + (placedSet.has(k) ? " placed" : "");
+  }
+  pairEl($("cur"), st.pair); pairEl($("n1"), st.nexts[0]); pairEl($("n2"), st.nexts[1]);
+  const total = R.steps.slice(0, fr.h + 1).reduce((a, s) => a + s.score, 0);
+  $("s-hand").textContent = `${fr.h + 1} / ${R.steps.length}`;
+  $("s-move").textContent = `${st.pair} ${st.move.str}`;
+  $("s-chain").textContent = st.chain ? `${st.chain} / ${st.score}` : "-";
+  $("s-total").textContent = total;
+  $("s-think").textContent = `${st.think_ms} ms`;
+  $("chainbig").textContent = fr.label.includes("連鎖") ? fr.label + "!" : (st.dead ? "窒息" : "");
+  $("slider").value = idx;
+  document.querySelectorAll("#hands span").forEach((s, h) => s.classList.toggle("cur", h === fr.h));
+}
+
+function go(i) { idx = Math.max(0, Math.min(frames.length - 1, i)); render(); }
+function gotoHand(h) { const i = frames.findIndex((f) => f.h === h); if (i >= 0) go(i); }
+function curHand() { return frames[idx]?.h ?? 0; }
+function toggle() {
+  if (timer) { clearInterval(timer); timer = null; $("b-play").textContent = "▶"; return; }
+  $("b-play").textContent = "⏸";
+  timer = setInterval(() => { if (idx >= frames.length - 1) toggle(); else go(idx + 1); }, +$("speed").value);
+}
+
+$("b-first").onclick = () => go(0);
+$("b-prev").onclick = () => go(idx - 1);
+$("b-next").onclick = () => go(idx + 1);
+$("b-prevh").onclick = () => gotoHand(curHand() - 1);
+$("b-nexth").onclick = () => gotoHand(curHand() + 1);
+$("b-play").onclick = toggle;
+$("speed").onchange = () => { if (timer) { toggle(); toggle(); } };
+$("b-maxc").onclick = () => {
+  let best = 0; R.steps.forEach((s, h) => { if (s.chain > R.steps[best].chain) best = h; });
+  gotoHand(best);
+};
+$("slider").oninput = (e) => go(+e.target.value);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") go(idx - 1);
+  else if (e.key === "ArrowRight") go(idx + 1);
+  else if (e.key === "ArrowUp") { e.preventDefault(); gotoHand(curHand() - 1); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); gotoHand(curHand() + 1); }
+  else if (e.key === " ") { e.preventDefault(); toggle(); }
+  else if (e.key === "Home") go(0);
+});
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  try { load(JSON.parse(await f.text())); } catch (err) { $("drop").textContent = "読み込み失敗: " + err; }
+});
+if (EMBEDDED) load(EMBEDDED);
+</script>
+</body>
+</html>
