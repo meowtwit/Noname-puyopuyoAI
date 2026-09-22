@@ -19,6 +19,7 @@ class GameState:
     hand: int  # 0 始まりの手数
     score: int  # これまでの累計得点
     hands_left: int | None = None  # 残り手数（今の手を含む）。無制限なら None
+    versus: object | None = None  # 対戦中なら puyo.versus.VersusInfo（相手の盤面・来るおじゃまなど）
 
     def legal_moves(self) -> list[Move]:
         return self.field.legal_moves(self.current)

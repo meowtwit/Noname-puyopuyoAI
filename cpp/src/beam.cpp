@@ -8,33 +8,43 @@ namespace puyo {
 
 namespace {
 
-constexpr double NONE = -1e9;  // その初手からは何も得られない（全滅など）
-
 struct Node {
     Field field;
     int first;  // 初手（legal の添字）
     double e;
 };
 
+// とこぷよ用の値: fire 連鎖以上を撃てたら特大。残り手数が探索内で尽きるなら撃った連鎖だけを数える
+struct TokopuyoValue : BeamValue {
+    const BeamOptions& opt;
+    const Evaluator& ev;
+    bool endgame;
+    TokopuyoValue(const BeamOptions& o, const Evaluator& e, bool end) : opt(o), ev(e), endgame(end) {}
+    double fired(int chains, int score) const override {
+        if (chains >= opt.fire) return 1e7 + score;
+        return (endgame ? 1.0 : opt.small_fire) * ev.chain_value(chains, score);
+    }
+    double leaf(double e, bool) const override { return endgame ? -1e6 + e * 1e-3 : e; }
+};
+
 }  // namespace
+
+bool BeamOptions::set(const std::string& k, double v) {
+    if (k == "width") width = static_cast<int>(v);
+    else if (k == "depth") depth = static_cast<int>(v);
+    else if (k == "samples") samples = static_cast<int>(v);
+    else if (k == "fire") fire = static_cast<int>(v);
+    else if (k == "small_fire") small_fire = v;
+    else return eval.set(k, v);
+    return true;
+}
 
 BeamOptions BeamOptions::from_map(const std::map<std::string, double>& m) {
     BeamOptions o;
-    for (const auto& [k, v] : m) {
-        if (k == "width") o.width = static_cast<int>(v);
-        else if (k == "depth") o.depth = static_cast<int>(v);
-        else if (k == "samples") o.samples = static_cast<int>(v);
-        else if (k == "fire") o.fire = static_cast<int>(v);
-        else if (k == "small_fire") o.small_fire = v;
-        else if (!o.eval.set(k, v)) throw std::invalid_argument("unknown option: " + k);
-    }
+    for (const auto& [k, v] : m)
+        if (!o.set(k, v)) throw std::invalid_argument("unknown option: " + k);
     if (o.width < 1 || o.depth < 1 || o.samples < 1) throw std::invalid_argument("width/depth/samples must be >= 1");
     return o;
-}
-
-double BeamAI::fired_value(int chains, int score, bool endgame) const {
-    if (chains >= opt_.fire) return 1e7 + score;
-    return (endgame ? 1.0 : opt_.small_fire) * ev_.chain_value(chains, score);
 }
 
 Move BeamAI::decide(const Field& field, const std::vector<Pair>& known, int hands_left,
@@ -55,28 +65,37 @@ Move BeamAI::decide(const Field& field, const std::vector<Pair>& known, int hand
     int depth = opt_.depth;
     if (hands_left >= 0) depth = std::max(1, std::min(depth, hands_left));
     const bool endgame = hands_left >= 0 && hands_left <= opt_.depth;
-    // 見えているツモだけで探索しきれるなら推測は 1 回で十分
-    const int samples = static_cast<int>(known.size()) >= depth ? 1 : opt_.samples;
-
-    std::vector<double> total(legal.size(), 0.0), best;
-    for (int s = 0; s < samples; ++s) {
-        std::vector<Pair> seq = sampler_.extend(known, depth, remaining);
-        best.assign(legal.size(), NONE);
-        search(field, legal, seq, endgame, best);
-        for (size_t i = 0; i < legal.size(); ++i) total[i] += best[i];
-    }
+    std::vector<double> total =
+        expected_values(field, legal, known, depth, remaining, TokopuyoValue(opt_, ev_, endgame));
     size_t arg = 0;
     for (size_t i = 1; i < legal.size(); ++i)
         if (total[i] > total[arg]) arg = i;
     return legal.at(arg);
 }
 
-void BeamAI::search(const Field& root, const std::vector<Move>& legal, const std::vector<Pair>& seq, bool endgame,
-                    std::vector<double>& best) const {
+std::vector<double> BeamAI::expected_values(const Field& field, const std::vector<Move>& legal,
+                                            const std::vector<Pair>& known, int depth,
+                                            const std::array<int, 4>* remaining, const BeamValue& value) {
+    // 見えているツモだけで探索しきれるなら推測は 1 回で十分
+    const int samples = static_cast<int>(known.size()) >= depth ? 1 : opt_.samples;
+    std::vector<double> total(legal.size(), 0.0), best;
+    for (int s = 0; s < samples; ++s) {
+        std::vector<Pair> seq = sampler_.extend(known, depth, remaining);
+        best.assign(legal.size(), BEAM_NONE);
+        search(field, legal, seq, value, best);
+        for (size_t i = 0; i < legal.size(); ++i) total[i] += best[i];
+    }
+    for (double& t : total) t /= samples;
+    return total;
+}
+
+void BeamAI::search(const Field& root, const std::vector<Move>& legal, const std::vector<Pair>& seq,
+                    const BeamValue& value, std::vector<double>& best) const {
     std::vector<Node> beam{{root, -1, 0.0}}, children;
     std::unordered_set<uint64_t> seen;
     const int depth = static_cast<int>(seq.size());
     for (int d = 0; d < depth; ++d) {
+        const bool last = d == depth - 1;
         children.clear();
         for (const Node& node : beam) {
             const std::vector<Move>& moves = d == 0 ? legal : legal_moves(node.field, seq[d]);
@@ -85,12 +104,11 @@ void BeamAI::search(const Field& root, const std::vector<Move>& legal, const std
                 if (s.field.is_dead()) continue;
                 int first = d == 0 ? static_cast<int>(i) : node.first;
                 if (s.chain.chains) {  // 撃ったらそこで打ち切り
-                    best[first] = std::max(best[first], fired_value(s.chain.chains, s.chain.score, endgame));
+                    best[first] = std::max(best[first], value.fired(s.chain.chains, s.chain.score));
                     continue;
                 }
                 double e = ev_.eval(s.field);
-                // 残り手数が探索内で尽きるなら、撃っていない盤面の見込みは数えない
-                best[first] = std::max(best[first], endgame ? -1e6 + e * 1e-3 : e);
+                best[first] = std::max(best[first], value.leaf(e, last));
                 children.push_back({s.field, first, e});
             }
         }

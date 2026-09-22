@@ -4,6 +4,8 @@
   python -m puyo play  --ai greedy --seed 3        # 1 ゲーム実行してリプレイ HTML を出力
   python -m puyo sim "..RB..\n.RRBB." --pair RB --move 3^   # 盤面から 1 手シミュレーション
   python -m puyo tune  --ai beam_cpp --space beam --trials 30   # パラメータ自動調整（要 optuna）
+  python -m puyo versus --ai1 versus_cpp --ai2 beam_cpp -n 100  # 対戦で勝率を測る
+  python -m puyo vplay  --ai1 versus_cpp --ai2 beam_cpp --seed 0 --open   # 対戦 1 局のリプレイ
 """
 
 from __future__ import annotations
@@ -117,6 +119,61 @@ def cmd_tune(a: argparse.Namespace) -> None:
     )
 
 
+def _versus_config(a: argparse.Namespace):
+    from .versus import MatchConfig, VersusRules
+
+    rules = VersusRules(
+        hand_frames=a.hand_frames, chain_frames=a.chain_frames, max_ojama_rows=a.max_rows,
+        max_hands=a.max_hands, visible_nexts=a.nexts, tsumo_mode=a.mode,
+    )
+    return MatchConfig(a.ai1, a.ai2, _parse_opts(a.opt1), _parse_opts(a.opt2), getattr(a, "games", 1), a.seed, rules)
+
+
+def cmd_versus(a: argparse.Namespace) -> None:
+    from .versus import format_matches, run_matches
+
+    cfg = _versus_config(a)
+    t0 = time.perf_counter()
+    rs = run_matches(cfg, jobs=a.jobs)
+    print(format_matches(cfg, rs))
+    print(f"  経過時間 {time.perf_counter() - t0:.1f} s")
+
+
+def cmd_vplay(a: argparse.Namespace) -> None:
+    from .replay import write_versus_replay
+    from .versus import play_match
+
+    cfg = _versus_config(a)
+    r = play_match(cfg, a.seed, record=True)
+    names = [f"{cfg.ai1}（ai1）", f"{cfg.ai2}（ai2）"]
+    result = "引き分け" if r.winner is None else f"{names[r.winner]} の勝ち"
+    print(f"seed={a.seed} {result}（{r.reason}） 手数 {r.hands}  時間 {r.time / 60:.1f} 秒")
+    for i in range(2):
+        s = r.stats[i]
+        print(f"  {names[i]}: 最大{s.max_chain}連鎖  送った{s.sent}  受けた{s.received}  発火{s.fires}回")
+    if r.error:
+        print(r.error, file=sys.stderr)
+    out = a.out or f"replays/versus_{cfg.ai1}_vs_{cfg.ai2}_seed{a.seed}.html"
+    path = write_versus_replay(r.replay, out)
+    print(f"リプレイ: {path}")
+    if a.open:
+        os.system(f"open '{path}'")
+
+
+def _add_versus_common(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--ai1", default="versus_cpp")
+    p.add_argument("--ai2", default="beam_cpp")
+    p.add_argument("--opt1", action="append", default=[], metavar="KEY=VALUE", help="ai1 のオプション")
+    p.add_argument("--opt2", action="append", default=[], metavar="KEY=VALUE", help="ai2 のオプション")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--mode", default="ac", choices=TSUMO_MODES)
+    p.add_argument("--nexts", type=int, default=2)
+    p.add_argument("--hand-frames", type=int, default=40, help="1 手にかかるフレーム")
+    p.add_argument("--chain-frames", type=int, default=60, help="連鎖 1 段にかかるフレーム")
+    p.add_argument("--max-rows", type=int, default=6, help="おじゃまが 1 回に降る最大段数")
+    p.add_argument("--max-hands", type=int, default=250, help="この手数で引き分け")
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m puyo", description="ぷよぷよ AI 試験環境")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -156,6 +213,18 @@ def main(argv: list[str] | None = None) -> None:
     t.add_argument("--validate", type=int, default=300, help="検証に使うゲーム数")
     t.add_argument("--top", type=int, default=3, help="検証する上位の数")
     t.set_defaults(func=cmd_tune)
+
+    v = sub.add_parser("versus", help="2 つの AI を対戦させて勝率を測る")
+    _add_versus_common(v)
+    v.add_argument("-n", "--games", type=int, default=100)
+    v.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
+    v.set_defaults(func=cmd_versus)
+
+    vp = sub.add_parser("vplay", help="対戦を 1 局行ってリプレイ HTML を出力する")
+    _add_versus_common(vp)
+    vp.add_argument("-o", "--out")
+    vp.add_argument("--open", action="store_true")
+    vp.set_defaults(func=cmd_vplay)
 
     a = ap.parse_args(argv)
     a.func(a)

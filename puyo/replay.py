@@ -53,3 +53,17 @@ def write_replay(replay: dict, path: str | Path) -> Path:
         html = VIEWER_TEMPLATE.read_text().replace("/*__REPLAY_DATA__*/null", json.dumps(replay, ensure_ascii=False))
         path.write_text(html)
     return path
+
+
+VERSUS_VIEWER_TEMPLATE = Path(__file__).with_name("versus_viewer.html")
+
+
+def write_versus_replay(replay: dict, path: str | Path) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix == ".json":
+        path.write_text(json.dumps(replay, ensure_ascii=False))
+    else:
+        html = VERSUS_VIEWER_TEMPLATE.read_text().replace("/*__REPLAY_DATA__*/null", json.dumps(replay, ensure_ascii=False))
+        path.write_text(html)
+    return path

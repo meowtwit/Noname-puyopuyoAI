@@ -8,6 +8,7 @@
 #include "puyo/detect.hpp"
 #include "puyo/lookahead.hpp"
 #include "puyo/mcts.hpp"
+#include "puyo/versus.hpp"
 
 namespace py = pybind11;
 using namespace puyo;
@@ -103,4 +104,32 @@ PYBIND11_MODULE(_puyocpp, m) {
 
     bind_sampling_ai<BeamAI, BeamOptions>(m, "BeamAI", "見えないツモの期待値を取るビームサーチ");
     bind_sampling_ai<MctsAI, MctsOptions>(m, "MctsAI", "見えないツモを推測し直す open-loop MCTS");
+
+    py::class_<VersusAI>(m, "VersusAI", "対戦用 AI（打ち返し）")
+        .def(py::init([](const std::map<std::string, double>& opts, uint64_t seed) {
+                 return VersusAI(VersusOptions::from_map(opts), seed);
+             }),
+             py::arg("options") = std::map<std::string, double>{}, py::arg("seed") = 0)
+        .def(
+            "decide",
+            [](VersusAI& ai, const std::vector<std::string>& cols, const std::vector<std::string>& pairs,
+               std::optional<std::array<int, 4>> remaining, int incoming, int window, int carry,
+               const std::vector<std::string>& opp_cols, const std::vector<std::string>& opp_pairs, int hand_frames,
+               int chain_frames) {
+                Field f = Field::from_cols(cols), opp = Field::from_cols(opp_cols);
+                std::vector<Pair> ps = parse_pairs(pairs);
+                VersusContext ctx{incoming, window, carry, parse_pairs(opp_pairs), hand_frames, chain_frames};
+                Move mv;
+                {
+                    py::gil_scoped_release release;
+                    mv = ai.decide(f, ps, remaining ? &*remaining : nullptr, ctx, opp);
+                }
+                return py::make_tuple(int(mv.x), int(mv.rot));
+            },
+            py::arg("cols"), py::arg("pairs"), py::arg("remaining"), py::arg("incoming"), py::arg("window"),
+            py::arg("carry"), py::arg("opp_cols"), py::arg("opp_pairs") = std::vector<std::string>{},
+            py::arg("hand_frames") = 40, py::arg("chain_frames") = 60)
+        .def("counter_potential", [](const VersusAI& ai, const std::vector<std::string>& opp_cols) {
+            return ai.counter_potential(Field::from_cols(opp_cols));
+        });
 }

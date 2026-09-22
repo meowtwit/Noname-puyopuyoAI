@@ -16,6 +16,7 @@ BUILTIN = {
     "lookahead_cpp": "puyo.ai.lookahead_cpp:LookaheadCppAI",
     "beam_cpp": "puyo.ai.sampling_cpp:BeamCppAI",
     "mcts_cpp": "puyo.ai.sampling_cpp:MctsCppAI",
+    "versus_cpp": "puyo.ai.sampling_cpp:VersusCppAI",
 }
 
 

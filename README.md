@@ -30,7 +30,7 @@ Python 版だけなら外部ライブラリは不要（Python 3.11+）。C++ 版
 
 | オプション | 既定 | 意味 |
 |---|---|---|
-| `--ai` | greedy | `random` / `greedy` / `lookahead` / `lookahead_cpp` / `beam_cpp` / `mcts_cpp` / `モジュール:クラス` |
+| `--ai` | greedy | `random` / `greedy` / `lookahead` / `lookahead_cpp` / `beam_cpp` / `mcts_cpp` / `versus_cpp` / `モジュール:クラス` |
 | `--hands` | 50 | 最大手数 |
 | `--target` | 10 | 目標連鎖数（発火したらそのゲームは終了） |
 | `--no-stop` | – | 目標を達成しても最大手数まで続ける |
@@ -106,6 +106,40 @@ AC 通は 128 手で各色 64 個なので、AI はこれまでに見たツモ�
 ### 評価関数（`cpp/src/eval.cpp`）
 
 3 つの AI で共通。`eval = 連鎖検出の最大値（連鎖数×w_chain＋得点/100−足りない個数×w_need）＋形（conn2・conn3 の加点、U 字からのずれ²×w_shape と通路を塞ぐ形×w_block の減点）`。
+
+## 対戦（`python -m puyo versus` / `vplay`）
+
+```sh
+python -m puyo versus --ai1 versus_cpp --ai2 beam_cpp --opt2 fire=10 -n 100   # 勝率（95% 信頼区間つき）
+python -m puyo vplay  --ai1 versus_cpp --ai2 beam_cpp --opt2 fire=10 --seed 2 --open   # 1 局のリプレイ（2 画面）
+```
+
+### ルール（`puyo/versus.py`）
+
+- 2 人とも同じツモ列。時間はフレームで進む: 1 手 40f（ちぎり +20f）、連鎖 1 段 60f、おじゃま落下 30f（書籍の「N 連鎖の間に約 1.5N 手置ける」に合わせた値。`--hand-frames` `--chain-frames` で変更可）
+- 連鎖の各段の得点を 70 点で 1 個のおじゃまに換算（端数は持ち越し）。自分に来る予定のおじゃまがあれば先に相殺し、残りを相手へ
+- **おじゃまは、相手の連鎖がすべて終わった後に置いた 1 手の後に降る**（その手で自分が連鎖したら連鎖の後）。1 回に最大 6 段（36 個、`--max-rows`）、残りは次の手の後
+- 3 列目の 12 段目が埋まったら負け。250 手（`--max-hands`）で引き分け。奇数シードは左右を入れ替えて有利不利を打ち消す
+- AI には `GameState.versus`（`VersusInfo`）で、相手の盤面・来るおじゃまの見込み・降るまでに置ける手数（`window`）・相手の次のツモなどが渡る
+- 簡略化: 全消しボーナス、相殺による連鎖中の予告の細かい挙動、操作のフレーム差（回し・高さによる落下時間）は再現していない
+
+### versus_cpp（`cpp/src/versus.cpp`）: 打ち返し AI
+
+基本戦略は「自分からは撃たずに組み、相手が発火したら降るまでに打ち返す」。
+
+1. **倒せるなら撃つ**: 送るおじゃま ≥ 相手の 3 列目を埋める量 ＋ 相手が打ち返せる量 ＋ `kill_margin`（30）。
+   相手が打ち返せる量は、**相手の立場でビームサーチ**して「自分の連鎖が終わるまでに相手が撃てる最大のおじゃま」を見積もる
+2. **打ち返し**: 来るおじゃまが `accept`（6）個を超え、降るまでの手数（相手の連鎖が終わるまでの手数 ＋ 1）がビームの深さ以内なら、
+   その手数の中で「送り返すおじゃま − 来るおじゃま」が最大になる発火をビームサーチで探す（撃たずに受けるのも候補）
+3. それ以外はとこぷよの beam と同じく組む（`fire` の既定は 99 = 連鎖数だけでは撃たない。盤面が埋まると撃つ枝しか残らず自然に撃つ）
+
+| 対戦（100 局） | versus_cpp の勝率 |
+|---|---|
+| vs beam_cpp（10 連鎖以上が撃てたら撃つ） | **83%** ± 7% |
+| vs beam_cpp（12 連鎖以上が撃てたら撃つ） | **72%** ± 9% |
+| vs versus_cpp（同じ AI、60 局） | 40% ± 12%（五分の範囲） |
+
+改良前（倒せる量の見積もりが「今の盤面にぷよを数個足す」程度だった版）は vs beam（10）で 52.5%。先に 8 連鎖を撃ち、相手にその間の約 13 手で 11 連鎖を組まれて返される負け方が多かった。
 
 ## パラメータ自動調整（`python -m puyo tune`）
 
@@ -213,7 +247,9 @@ puyo/
   viewer.html リプレイビューア（← → でフレーム、↑ ↓ で手、Space で再生）
   ai/         random（下限）、greedy（1 手読み）、lookahead（見えているツモ＋仮想連鎖検出で評価）
   ai/lookahead_cpp.py  C++ 版 lookahead の呼び出し
-  ai/sampling_cpp.py   beam_cpp / mcts_cpp の呼び出し（ツモの数え上げ）
+  ai/sampling_cpp.py   beam_cpp / mcts_cpp / versus_cpp の呼び出し（ツモの数え上げ）
+  versus.py            対戦エンジン（時間・おじゃま・相殺）と対戦の実行
+  versus_viewer.html   対戦リプレイのビューア（#t=フレーム でその時刻へ）
   tune.py              パラメータ自動調整
 cpp/
   include/puyo/bits.hpp   ビットボード（SIMD バックエンドの切り替え）
@@ -223,6 +259,7 @@ cpp/
   src/lookahead.cpp       lookahead AI
   src/beam.cpp            期待値ビームサーチ
   src/mcts.cpp            open-loop MCTS
+  src/versus.cpp          対戦用 AI（打ち返し）
   include/puyo/sampler.hpp  見えないツモの推測
   src/bindings.cpp        pybind11 モジュール
   tools/selftest.cpp      C++ 単体テスト＆ベンチ

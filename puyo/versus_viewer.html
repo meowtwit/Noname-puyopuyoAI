@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ぷよぷよ 対戦リプレイ</title>
+<style>
+  :root {
+    --bg: #14161c; --panel: #1e2129; --text: #e7e9ee; --muted: #8a90a0; --line: #2d313c;
+    --R: #e8464b; --G: #3fbf5a; --B: #3f7fe8; --Y: #f0c93a; --O: #b9bcc6; --accent: #f0c93a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+  h1 { font-size: 16px; margin: 0; }
+  .sub { color: var(--muted); font-size: 12px; margin-top: -8px; }
+  .boards { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
+  .player { display: grid; gap: 6px; justify-items: center; }
+  .pname { font-weight: 600; }
+  .pname.win::after { content: " 勝ち"; color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: flex-start; }
+  .field { display: grid; grid-template-columns: repeat(6, 28px); grid-template-rows: repeat(13, 28px); gap: 2px;
+           background: var(--panel); padding: 5px; border-radius: 8px; border: 1px solid var(--line); }
+  .cell { border-radius: 50%; position: relative; }
+  .cell.row13 { opacity: .45; }
+  .cell.death::before { content: "×"; position: absolute; inset: 0; display: grid; place-items: center; color: #e8464b88; font-weight: bold; }
+  .p-R { background: var(--R); } .p-G { background: var(--G); } .p-B { background: var(--B); }
+  .p-Y { background: var(--Y); } .p-O { background: var(--O); border-radius: 30%; }
+  .cell.erase { animation: blink .25s alternate infinite; box-shadow: 0 0 0 2px #fff; }
+  .cell.placed { box-shadow: 0 0 0 2px #fff8; }
+  @keyframes blink { to { opacity: .25; } }
+  .nexts { display: grid; gap: 6px; }
+  .next { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px; display: grid; gap: 2px; justify-items: center; }
+  .next .cell { width: 20px; height: 20px; }
+  .next .lbl { font-size: 10px; color: var(--muted); }
+  .incoming { min-height: 22px; font-size: 13px; color: var(--muted); text-align: center; }
+  .incoming b { color: #ff8a8a; font-size: 16px; }
+  .chainlbl { min-height: 26px; font-size: 20px; font-weight: 700; color: var(--accent); }
+  .stat { color: var(--muted); font-size: 12px; text-align: center; }
+  .controls { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  button, select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  input[type=range] { width: 100%; }
+  .time { text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .hint, .drop { color: var(--muted); font-size: 12px; text-align: center; }
+  .drop { border: 1px dashed var(--line); border-radius: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">ぷよぷよ 対戦リプレイ</h1>
+  <div class="sub" id="subtitle"></div>
+  <div class="boards" id="boards"></div>
+  <div class="time" id="time"></div>
+  <div class="controls">
+    <button id="b-first">⏮</button>
+    <button id="b-prev" title="←">◀</button>
+    <button id="b-play" title="Space">▶</button>
+    <button id="b-next" title="→">▶</button>
+    <button id="b-last">⏭</button>
+    <select id="speed"><option value="400">遅い</option><option value="150" selected>普通</option><option value="50">速い</option></select>
+  </div>
+  <input type="range" id="slider" min="0" value="0">
+  <div class="hint">← → でコマ送り、Space で再生。おじゃまの予告は「来る予定の個数」（相殺後）。</div>
+  <div class="drop" id="drop">別の対戦リプレイ JSON をここにドロップして開けます</div>
+</main>
+<script>
+const EMBEDDED = /*__REPLAY_DATA__*/null;
+let R = null, frames = [], idx = 0, timer = null;
+const $ = (id) => document.getElementById(id);
+const boards = [];
+
+function buildBoards() {
+  $("boards").innerHTML = "";
+  boards.length = 0;
+  for (let p = 0; p < 2; p++) {
+    const root = document.createElement("div");
+    root.className = "player";
+    root.innerHTML = `<div class="pname"></div><div class="incoming"></div><div class="chainlbl"></div>
+      <div class="row"><div class="field"></div><div class="nexts"></div></div><div class="stat"></div>`;
+    const field = root.querySelector(".field"), cells = {};
+    for (let y = 13; y >= 1; y--) for (let x = 1; x <= 6; x++) {
+      const d = document.createElement("div");
+      field.appendChild(d); cells[x + "," + y] = d;
+    }
+    const nexts = root.querySelector(".nexts"), nextEls = [];
+    ["現在", "NEXT", "NEXT2"].forEach((l) => {
+      const n = document.createElement("div"); n.className = "next";
+      n.innerHTML = `<div class="lbl">${l}</div><div></div>`; nexts.appendChild(n); nextEls.push(n.lastChild);
+    });
+    $("boards").appendChild(root);
+    boards.push({ root, cells, nextEls });
+  }
+}
+
+function pairEl(el, pair) {
+  el.innerHTML = "";
+  if (!pair) return;
+  for (const c of [pair[1], pair[0]]) { const d = document.createElement("div"); d.className = "cell p-" + c; el.appendChild(d); }
+}
+
+function latest(list, t) {  // t 以前で最後の要素
+  let r = null;
+  for (const s of list) { if (s.t <= t) r = s; else break; }
+  return r;
+}
+
+function load(replay) {
+  R = replay;
+  buildBoards();
+  const times = new Set([0]);
+  R.players.forEach((p) => p.snapshots.forEach((s) => times.add(s.t)));
+  R.incoming.forEach(([t]) => times.add(t));
+  frames = [...times].filter((t) => t <= R.end).sort((a, b) => a - b);
+  R.players.forEach((p, i) => {
+    const b = boards[i];
+    b.root.querySelector(".pname").textContent = p.ai;
+    b.root.querySelector(".pname").classList.toggle("win", R.winner === i);
+    const s = p.stats;
+    b.root.querySelector(".stat").textContent = `最大${s.max_chain}連鎖 / 送った${s.sent} / 受けた${s.received} / 発火${s.fires}回`;
+  });
+  const res = R.winner === null ? "引き分け" : `${R.players[R.winner].ai} の勝ち`;
+  $("title").textContent = `ぷよぷよ 対戦リプレイ（seed ${R.seed}）`;
+  $("subtitle").textContent = `${res}（${R.reason}） / ${(R.end / 60).toFixed(1)} 秒`;
+  $("slider").max = frames.length - 1;
+  idx = 0; render();
+}
+
+function render() {
+  const t = frames[idx];
+  const inc = latest(R.incoming.map(([tt, a, b]) => ({ t: tt, v: [a, b] })), t);
+  R.players.forEach((p, i) => {
+    const b = boards[i], s = latest(p.snapshots, t);
+    const field = s ? s.field : ["", "", "", "", "", ""];
+    const erase = new Set((s?.erase || []).map(([x, y]) => x + "," + y));
+    const placed = new Set();
+    if (s && s.move && s.t === t) {
+      const [mx, rot] = s.move, cx = mx + (rot === 1 ? 1 : rot === 3 ? -1 : 0);
+      const h = (x) => field[x - 1].length;
+      if (mx === cx) { placed.add(`${mx},${h(mx)}`); placed.add(`${mx},${h(mx) - 1}`); }
+      else { placed.add(`${mx},${h(mx)}`); placed.add(`${cx},${h(cx)}`); }
+    }
+    for (let x = 1; x <= 6; x++) for (let y = 1; y <= 13; y++) {
+      const k = x + "," + y, c = field[x - 1][y - 1];
+      b.cells[k].className = "cell" + (y === 13 ? " row13" : "") + (x === 3 && y === 12 && !c ? " death" : "") +
+        (c ? " p-" + c : "") + (erase.has(k) ? " erase" : "") + (placed.has(k) ? " placed" : "");
+    }
+    (s ? s.pairs : []).forEach((pp, j) => pairEl(b.nextEls[j], pp));
+    const n = inc ? inc.v[i] : 0;
+    b.root.querySelector(".incoming").innerHTML = n ? `おじゃま予告 <b>${n}</b>（${(n / 6).toFixed(1)} 段）` : "";
+    b.root.querySelector(".chainlbl").textContent = s && s.label.includes("連鎖") && t - s.t < 60 ? s.label + "!" : "";
+  });
+  $("time").textContent = `${(t / 60).toFixed(2)} 秒（${t} フレーム）  ${idx + 1} / ${frames.length}`;
+  $("slider").value = idx;
+}
+
+function go(i) { idx = Math.max(0, Math.min(frames.length - 1, i)); render(); }
+function toggle() {
+  if (timer) { clearInterval(timer); timer = null; $("b-play").textContent = "▶"; return; }
+  $("b-play").textContent = "⏸";
+  timer = setInterval(() => { if (idx >= frames.length - 1) toggle(); else go(idx + 1); }, +$("speed").value);
+}
+$("b-first").onclick = () => go(0);
+$("b-last").onclick = () => go(frames.length - 1);
+$("b-prev").onclick = () => go(idx - 1);
+$("b-next").onclick = () => go(idx + 1);
+$("b-play").onclick = toggle;
+$("speed").onchange = () => { if (timer) { toggle(); toggle(); } };
+$("slider").oninput = (e) => go(+e.target.value);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") go(idx - 1);
+  else if (e.key === "ArrowRight") go(idx + 1);
+  else if (e.key === " ") { e.preventDefault(); toggle(); }
+});
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0]; if (!f) return;
+  try { load(JSON.parse(await f.text())); } catch (err) { $("drop").textContent = "読み込み失敗: " + err; }
+});
+if (EMBEDDED) load(EMBEDDED);
+// #t=フレーム でその時刻へ
+const m = location.hash.match(/t=(\d+)/);
+if (R && m) { const t = +m[1]; const i = frames.findIndex((f) => f >= t); go(i < 0 ? frames.length - 1 : i); }
+</script>
+</body>
+</html>

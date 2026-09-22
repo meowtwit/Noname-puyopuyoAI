@@ -70,3 +70,25 @@ class MctsCppAI(SamplingCppAI):
 
     name = "mcts_cpp"
     impl_class = _puyocpp.MctsAI
+
+
+class VersusCppAI(SamplingCppAI):
+    """対戦用（相手の発火中に打ち返す）。オプション: accept, w_ojama, counter_need, kill_margin ＋ beam のオプション。
+
+    とこぷよ（state.versus が無い）ではおじゃまが来ないので、beam_cpp とほぼ同じ動きになる。
+    """
+
+    name = "versus_cpp"
+    impl_class = _puyocpp.VersusAI
+
+    def decide(self, state: GameState) -> Move:
+        pairs = [str(state.current), *(str(p) for p in state.nexts)]
+        v = state.versus
+        if v is None:
+            x, rot = self.impl.decide(state.field.to_json(), pairs, self.remaining(state), 0, 0, 0, [""] * 6)
+        else:
+            x, rot = self.impl.decide(
+                state.field.to_json(), pairs, self.remaining(state), v.incoming_total, v.window, v.carry,
+                v.opp_field.to_json(), [str(p) for p in v.opp_pairs], v.rules.hand_frames, v.rules.chain_frames,
+            )
+        return Move(x, rot)
