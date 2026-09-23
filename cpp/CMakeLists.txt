@@ -65,7 +65,7 @@ else()
   add_compile_options(-Wall -Wextra -O3)
 endif()
 
-add_library(puyocore STATIC src/field.cpp src/controller.cpp src/detect.cpp src/eval.cpp src/lookahead.cpp src/beam.cpp src/mcts.cpp src/versus.cpp)
+add_library(puyocore STATIC src/field.cpp src/controller.cpp src/detect.cpp src/eval.cpp src/lookahead.cpp src/beam.cpp src/mcts.cpp src/versus.cpp src/nn.cpp)
 target_include_directories(puyocore PUBLIC include)
 if(_simd STREQUAL "SIMDE")
   target_include_directories(puyocore PUBLIC ${PUYO_SIMDE_DIR})

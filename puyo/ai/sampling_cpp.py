@@ -29,6 +29,9 @@ class SamplingCppAI(AI):
         super().__init__(seed, **options)
         opts = dict(options)
         self.tsumo_model = opts.pop("tsumo_model", "ac")
+        nn_path = opts.pop("nn", None)  # 盤面評価ネットワーク（scripts/train_nn.py）。w_nn と一緒に使う
+        if nn_path and not _puyocpp.load_nn(str(nn_path)):
+            raise ValueError(f"ネットワークを読み込めません: {nn_path}")
         if self.tsumo_model not in ("ac", "uniform"):
             raise ValueError(f"unknown tsumo_model: {self.tsumo_model}")
         self.impl = self.impl_class({k: float(v) for k, v in opts.items()}, seed)

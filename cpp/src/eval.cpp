@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "puyo/detect.hpp"
+#include "puyo/nn.hpp"
 
 namespace puyo {
 
@@ -25,6 +26,8 @@ bool EvalOptions::set(const std::string& k, double v) {
     else if (k == "w_over") w_over = v;
     else if (k == "w_waste") w_waste = v;
     else if (k == "w_junk") w_junk = v;
+    else if (k == "w_nn") w_nn = v;
+    else if (k == "w_base") w_base = v;
     else if (k == "conn2") conn2 = v;
     else if (k == "conn3") conn3 = v;
     else if (k == "w_shape") w_shape = v;
@@ -49,7 +52,8 @@ double Evaluator::trigger_value(const Field& field) const {
 }
 
 double Evaluator::eval(const Field& field) const {
-    double v = trigger_value(field) + shape(field);
+    double v = opt_.w_base == 0 ? 0.0 : opt_.w_base * (trigger_value(field) + shape(field));
+    if (opt_.w_nn > 0) v += opt_.w_nn * global_nn().eval(field);
     if (opt_.w_dual > 0) v += opt_.w_dual * dual_ojama(field);
     if (opt_.max_puyos > 0) v -= opt_.w_over * std::max(0, field.count() - opt_.max_puyos);
     return v;

@@ -9,6 +9,7 @@
 #include "puyo/detect.hpp"
 #include "puyo/lookahead.hpp"
 #include "puyo/mcts.hpp"
+#include "puyo/nn.hpp"
 #include "puyo/versus.hpp"
 
 namespace py = pybind11;
@@ -118,6 +119,13 @@ PYBIND11_MODULE(_puyocpp, m) {
         return out;
     }, py::arg("heights"), py::arg("top") = std::vector<bool>{},
        "列の高さ（と 14 段目が埋まっている列）から、置ける場所ごとの最短の操作 (x, rot, キー列, フレーム) を返す");
+
+    m.def("load_nn", [](const std::string& path) {
+        if (global_nn().path() == path) return true;
+        return global_nn().load(path);
+    }, "盤面評価ネットワークを読み込む（プロセス全体で共有。評価関数の w_nn > 0 で使われる）");
+    m.def("nn_eval", [](const std::vector<std::string>& cols) { return global_nn().eval(Field::from_cols(cols)); },
+          "読み込んだネットワークの予測（撃てそうな連鎖数）");
 
     m.def("dual_ojama", [](const std::vector<std::string>& cols) {
         return Evaluator(EvalOptions{}).dual_ojama(Field::from_cols(cols));

@@ -32,6 +32,9 @@ struct EvalOptions {
     // 連鎖の効率: 1 段 4 個ちょうどで消える連鎖ほど良い（同じ広さで長く組め、空きも残る）
     double w_waste = 0;  // 消えるぷよのうち「連鎖数 × 4」を超える分（5 個以上の連結）1 個あたりの減点
     double w_junk = 0;   // その連鎖を撃った後に残るぷよ 1 個あたりの減点
+    // 盤面評価ネットワーク（nn.hpp、load_nn で読み込む）の予測（撃てそうな連鎖数）× w_nn を足す。0 なら使わない
+    double w_nn = 0;
+    double w_base = 1;   // 従来の評価（連鎖検出＋形）の倍率。0 にするとネットワークだけで評価する
 
     // 評価関数のオプションなら設定して true
     bool set(const std::string& key, double value);

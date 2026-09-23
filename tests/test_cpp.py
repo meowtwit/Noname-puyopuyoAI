@@ -162,3 +162,33 @@ def test_controller_matches_python():
         top = [hh == 13 and rng.random() < 0.3 for hh in h]
         py = [(m.x, m.rot, op.keys, op.frames) for m, op in Controller(h, top).plan().items()]
         assert cpp.plan_operations(h, top) == py
+
+
+def test_nn_inference_matches_numpy(tmp_path):
+    """書き出し形式どおりの小さなネットワークを作り、C++ の推論が numpy の計算と一致すること。"""
+    import struct
+
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    shapes = [(420, 8), (8, 4), (4, 1)]
+    layers = [(rng.normal(size=s).astype("<f4"), rng.normal(size=s[1]).astype("<f4")) for s in shapes]
+    path = tmp_path / "tiny.bin"
+    with open(path, "wb") as f:
+        f.write(b"PNN1" + struct.pack("<i", len(layers)))
+        for w, b in layers:
+            f.write(struct.pack("<ii", *w.shape) + w.tobytes() + b.tobytes())
+    assert cpp.load_nn(str(path))
+    field = Field.parse("..R.../.RGB../BYYGRO")
+    x = np.zeros(420, "<f4")
+    for xx in range(1, 7):
+        for yy in range(1, 15):
+            c = field.get(xx, yy)
+            if c != Color.EMPTY:
+                x[((xx - 1) * 14 + (yy - 1)) * 5 + (int(c) - 1)] = 1  # R,G,B,Y,O の順
+    h = x
+    for i, (w, b) in enumerate(layers):
+        h = h @ w + b
+        if i < len(layers) - 1:
+            h = np.maximum(h, 0)
+    assert abs(cpp.nn_eval(field.to_json()) - float(h[0])) < 1e-3
