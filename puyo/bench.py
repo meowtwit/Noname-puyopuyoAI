@@ -44,6 +44,7 @@ class GameRecord:
     zenkeshi_early: bool  # 8 手以内に全消し（書籍では評価から除外）
     think_ms_total: float
     error: str | None = None
+    fire_puyos: int | None = None  # 最大連鎖を撃った手で、連鎖が始まる直前の盤面のぷよ数
 
 
 def run_game(cfg: BenchConfig, game_seed: int, keep_history: bool = False) -> tuple[GameRecord, Tokopuyo]:
@@ -53,6 +54,7 @@ def run_game(cfg: BenchConfig, game_seed: int, keep_history: bool = False) -> tu
         record_ops=keep_history,
     )
     max_chain = max_score = 0
+    fire_puyos = None
     target_hand = None
     zenkeshi_early = False
     think_total = 0.0
@@ -71,6 +73,7 @@ def run_game(cfg: BenchConfig, game_seed: int, keep_history: bool = False) -> tu
         think_total += think
         if res.chain.chains > max_chain or (res.chain.chains == max_chain and res.chain.score > max_score):
             max_chain, max_score = res.chain.chains, res.chain.score
+            fire_puyos = res.placed.count()
         if res.chain.chains and res.after.is_empty() and res.hand < 8:
             zenkeshi_early = True
         if res.chain.chains >= cfg.target_chain and target_hand is None:
@@ -90,6 +93,7 @@ def run_game(cfg: BenchConfig, game_seed: int, keep_history: bool = False) -> tu
         zenkeshi_early=zenkeshi_early,
         think_ms_total=think_total,
         error=error,
+        fire_puyos=fire_puyos,
     )
     return rec, game
 
@@ -137,6 +141,7 @@ class Summary:
     ms_per_move: float
     errors: int
     chain_hist: dict[int, int]
+    puyos_per_chain: float | None = None  # 最大連鎖を撃ったときの「盤面のぷよ数 / 連鎖数」の平均（小さいほど効率的）
 
 
 def summarize(cfg: BenchConfig, records: list[GameRecord]) -> Summary:
@@ -156,6 +161,8 @@ def summarize(cfg: BenchConfig, records: list[GameRecord]) -> Summary:
         ms_per_move=sum(r.think_ms_total for r in records) / moves,
         errors=sum(r.error is not None for r in records),
         chain_hist=dict(sorted(Counter(chains).items())),
+        puyos_per_chain=(statistics.fmean(r.fire_puyos / r.max_chain for r in rs if r.fire_puyos and r.max_chain >= 5)
+                         if any(r.fire_puyos and r.max_chain >= 5 for r in rs) else None),
     )
 
 
@@ -171,6 +178,8 @@ def format_summary(cfg: BenchConfig, s: Summary) -> str:
         f"  窒息率              : {s.death_rate * 100:.1f}%",
         f"  目標到達までの平均手数: {s.mean_target_hand:.1f}" if s.mean_target_hand else "  目標到達までの平均手数: -",
         f"  思考時間            : {s.ms_per_move:.2f} ms/手",
+        f"  1連鎖あたりのぷよ数 : {s.puyos_per_chain:.2f}（最大連鎖を撃った時点、5連鎖以上）" if s.puyos_per_chain else
+        "  1連鎖あたりのぷよ数 : -",
     ]
     if s.errors:
         lines.append(f"  !! AI エラー        : {s.errors} ゲーム")

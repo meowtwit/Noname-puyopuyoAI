@@ -23,6 +23,8 @@ bool EvalOptions::set(const std::string& k, double v) {
     else if (k == "dual_cap") dual_cap = static_cast<int>(v);
     else if (k == "max_puyos") max_puyos = static_cast<int>(v);
     else if (k == "w_over") w_over = v;
+    else if (k == "w_waste") w_waste = v;
+    else if (k == "w_junk") w_junk = v;
     else if (k == "conn2") conn2 = v;
     else if (k == "conn3") conn3 = v;
     else if (k == "w_shape") w_shape = v;
@@ -38,6 +40,8 @@ double Evaluator::trigger_value(const Field& field) const {
     for_each_trigger(field, [&](const Trigger& t) {
         if (!field.is_reachable(Move{static_cast<int8_t>(t.x), 0})) return;  // 起爆点に組ぷよが届くこと
         double v = chain_value(t.chains, t.score) - opt_.w_need * t.need;
+        if (opt_.w_waste > 0) v -= opt_.w_waste * std::max(0, t.erased - 4 * t.chains);
+        if (opt_.w_junk > 0) v -= opt_.w_junk * t.remain;
         if (!any || v > best) best = v;
         any = true;
     });

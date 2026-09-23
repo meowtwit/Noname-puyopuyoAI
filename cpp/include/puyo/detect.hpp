@@ -14,6 +14,8 @@ struct Trigger {
     int need;  // 足したぷよの数
     int chains;
     int score;
+    int erased = 0;  // 連鎖で消えたぷよ（足したぷよ・おじゃま含む）
+    int remain = 0;  // 連鎖の後に盤面に残るぷよ
 };
 
 // 各列の上に、周囲にある色のぷよを 1〜max_need 個足して起こせる連鎖を列挙する
@@ -41,8 +43,10 @@ void for_each_trigger(const Field& field, F&& fn, int max_need = 3) {
                 if (h + k > VISIBLE_HEIGHT) break;
                 f.drop(x, color);
                 if (f.connects4(x, h + k)) {
+                    const int before = f.count();
                     ChainResult res = f.resolve_chain();
-                    fn(Trigger{x, color, k, res.chains, res.score});
+                    const int remain = f.count();
+                    fn(Trigger{x, color, k, res.chains, res.score, before - remain, remain});
                     break;
                 }
             }
