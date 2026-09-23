@@ -131,3 +131,20 @@ def test_builtin_cpp_ais_run():
     for name, opts in (("beam_cpp", {"width": 6, "samples": 2, "depth": 4}), ("mcts_cpp", {"iterations": 100})):
         rec, _ = run_game(BenchConfig(ai=name, max_hands=10, ai_options=opts), game_seed=1)
         assert rec.error is None and rec.hands == 10
+
+
+def test_dual_and_main_ojama():
+    # 本線（階段 5 連鎖）だけの盤面: 本線はあるが、別の対応用の小連鎖は無い
+    cols = STAIRS.to_json()
+    assert cpp.main_ojama(cols) == 4840 // 70
+    assert cpp.dual_ojama(cols) == 0
+    # 本線と別に、左端で 2 個足せば撃てる 3 連鎖の形は無いので 0。空の盤面も 0
+    assert cpp.main_ojama([""] * 6) == 0 and cpp.dual_ojama([""] * 6) == 0
+
+
+def test_versus_ai_new_options():
+    ai = cpp.VersusAI({"w_dual": 100.0, "harass": 1.0, "harass_ratio": 0.8, "counter_opp": 1.0}, 0)
+    x, rot = ai.decide(STAIRS.to_json(), ["RR", "GB", "YY"], None, 0, 0, 0, [""] * 6)
+    assert 1 <= x <= 6
+    with pytest.raises(Exception):
+        cpp.VersusAI({"harass_margin": 1.0}, 0)  # 廃止したオプション

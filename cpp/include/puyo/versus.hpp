@@ -8,7 +8,14 @@
 //      「送り返すおじゃま − 来るおじゃま」が最大になる発火をビームサーチで探す（撃たずに受けるのも候補）
 //   3. 潰し: 見えている crush_depth 手の中で、crush_max_chain 連鎖以下・crush_min 個以上のおじゃまを送れる発火があり、
 //      相手がそれを打ち返せない（相手の立場でビームサーチして見積もる）なら、最短で撃つ
-//   4. それ以外はとこぷよと同じく連鎖を組む（盤面が埋まってくると撃つ枝しか残らなくなり、自然に撃つ）
+//   4. ちょっかい（催促）: 本線を残したまま撃てる harass_min_chain〜harass_max_chain 連鎖で harass_min 個以上送れ、
+//      撃った後の自分の本線が相手の本線の harass_ratio 倍以上（相手が本線を撃てばその間に伸ばせるため）で、
+//      相手が本線を残したまま撃てる対応（小連鎖）では返しきれないなら撃つ。
+//      相手は受けて潰されるか、渋々本線を撃つしかない。本線を撃ってきたら 2. で伸ばした本線で返す
+//   5. それ以外はとこぷよと同じく連鎖を組む（盤面が埋まってくると撃つ枝しか残らなくなり、自然に撃つ）。
+//      評価関数の w_dual で「本線と別に対応用の小連鎖を持つ形」を加点する
+// 打ち返しの評価（counter_opp=1）: 相殺しきって余った分は、相手が本線で返してくる量を差し引く。
+//   相手が本線を残している（ちょっかいを受けた）なら小連鎖で対応し、相手が本線を撃ち終えていれば本線で返す
 // 打ち返し・倒しでは、撃った後に残る連鎖の見込み（2 本目）も residual の割合で加点する。
 // 相手に返されても、その返しが降るまでに 2 本目を撃って返し返すため。
 #pragma once
@@ -44,6 +51,13 @@ struct VersusOptions {
     // 潰す前に相手が返せる量をどう見積もるか: 0=見ない / 1=相手に見えているツモだけで / 2=先のツモも推測して
     int crush_check = 1;
     int crush_until = 99;    // この手数（0 始まり）までしか潰さない（潰し最速なら小さくする）
+    int counter_opp = 1;     // 打ち返しで、余った分から相手の返しを差し引くか
+    int harass = 1;          // ちょっかいをするか
+    int harass_min = 12;     // ちょっかいで送る最小のおじゃま
+    int harass_min_chain = 2;
+    int harass_max_chain = 4;
+    double harass_keep = 0.8;  // 撃った後に本線が何割残っていればよいか
+    double harass_ratio = 0.8; // 撃った後の自分の本線が、相手の本線の何倍以上あればよいか
 
     static VersusOptions from_map(const std::map<std::string, double>& m);
 };
@@ -61,6 +75,8 @@ struct VersusContext {
 class VersusAI {
 public:
     VersusAI(VersusOptions opt, uint64_t seed) : opt_(opt), beam_(opt.beam, seed) {}
+    // 対戦用の既定: 評価関数で「対応用の小連鎖を別に持つ形」を加点する
+    static VersusOptions default_options();
 
     Move decide(const Field& field, const std::vector<Pair>& known, const std::array<int, 4>* remaining,
                 const VersusContext& ctx, const Field& opponent);
@@ -79,6 +95,8 @@ public:
                                             const Field& opponent);
     // 盤面に残る連鎖（色ぷよを 2 個まで足して起こせる最大の連鎖）のおじゃまの見込み
     static int residual_ojama(const Field& field);
+    // 盤面の本線（色ぷよを 3 個まで足して起こせる、min_chain 連鎖以上の最大の連鎖）のおじゃまの見込み
+    static int main_ojama(const Field& field, int min_chain = 5);
 
 private:
     VersusOptions opt_;

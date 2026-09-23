@@ -1,5 +1,7 @@
 #include "puyo/eval.hpp"
 
+#include <algorithm>
+
 #include "puyo/detect.hpp"
 
 namespace puyo {
@@ -14,6 +16,11 @@ const Bits VISIBLE = Bits::rect(1, VISIBLE_HEIGHT);
 
 bool EvalOptions::set(const std::string& k, double v) {
     if (k == "w_chain") w_chain = v;
+    else if (k == "w_dual") w_dual = v;
+    else if (k == "dual_min_chain") dual_min_chain = static_cast<int>(v);
+    else if (k == "dual_max_chain") dual_max_chain = static_cast<int>(v);
+    else if (k == "dual_keep") dual_keep = v;
+    else if (k == "dual_cap") dual_cap = static_cast<int>(v);
     else if (k == "conn2") conn2 = v;
     else if (k == "conn3") conn3 = v;
     else if (k == "w_shape") w_shape = v;
@@ -32,6 +39,50 @@ double Evaluator::trigger_value(const Field& field) const {
         if (!any || v > best) best = v;
         any = true;
     });
+    return best;
+}
+
+double Evaluator::eval(const Field& field) const {
+    double v = trigger_value(field) + shape(field);
+    if (opt_.w_dual > 0) v += opt_.w_dual * dual_ojama(field);
+    return v;
+}
+
+int Evaluator::dual_ojama(const Field& field) const {
+    // 発火点を集める（起爆点に届くもの）
+    struct T {
+        int x;
+        Color color;
+        int need, chains, score;
+    };
+    T ts[32];
+    int n = 0, main_chains = 0;
+    double main_value = 0;
+    for_each_trigger(field, [&](const Trigger& t) {
+        if (n >= 32 || !field.is_reachable(Move{static_cast<int8_t>(t.x), 0})) return;
+        ts[n++] = {t.x, t.color, t.need, t.chains, t.score};
+        main_chains = std::max(main_chains, t.chains);
+        main_value = std::max(main_value, chain_value(t.chains, t.score));
+    });
+    if (main_chains < 5) return 0;
+    int best = 0;
+    for (int i = 0; i < n; ++i) {
+        const T& t = ts[i];
+        // 対応用はすぐ撃てること（足りないぷよ 2 個まで）
+        if (t.chains < opt_.dual_min_chain || t.chains > opt_.dual_max_chain || t.need > 2) continue;
+        int oj = std::min(t.score / 70, opt_.dual_cap);
+        if (oj <= best) continue;
+        // 小連鎖を撃った後の盤面で本線が残るか
+        Field f = field;
+        for (int k = 0; k < t.need; ++k) f.drop(t.x, t.color);
+        f.resolve_chain();
+        double after = 0;
+        for_each_trigger(f, [&](const Trigger& u) {
+            if (u.chains >= 5 && f.is_reachable(Move{static_cast<int8_t>(u.x), 0}))
+                after = std::max(after, chain_value(u.chains, u.score));
+        });
+        if (after >= opt_.dual_keep * main_value) best = oj;
+    }
     return best;
 }
 

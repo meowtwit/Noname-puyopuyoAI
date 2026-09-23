@@ -10,13 +10,17 @@ namespace puyo {
 namespace {
 
 // 打ち返し探索の値: 送り返すおじゃま − 来るおじゃま ＋ 撃った後に残る連鎖（2 本目）× residual。
-// 撃たずに降るまでの手数を使い切ったら全部受ける
+// opp_counter > 0 なら、相殺しきって余った分からは相手が返してくる量を差し引く（相手が本線を残しているなら
+// 本線で返すのは損 → 小連鎖で対応する）。撃たずに降るまでの手数を使い切ったら全部受ける
 struct CounterValue : BeamValue {
     int incoming, carry;
     double w, residual;
-    CounterValue(int in, int c, double w_, double r) : incoming(in), carry(c), w(w_), residual(r) {}
+    int opp_counter;
+    CounterValue(int in, int c, double w_, double r, int opp = 0)
+        : incoming(in), carry(c), w(w_), residual(r), opp_counter(opp) {}
     double fired(int, int score, const Field& after) const override {
         double v = (score + carry) / OJAMA_RATE - incoming;
+        if (v > 0) v -= opp_counter;  // 余った分は相手の返しで相殺される
         if (residual > 0) v += residual * VersusAI::residual_ojama(after);
         return v * w;
     }
@@ -37,8 +41,16 @@ struct CrushValue : BeamValue {
 
 }  // namespace
 
-VersusOptions VersusOptions::from_map(const std::map<std::string, double>& m) {
+VersusOptions VersusAI::default_options() {
+    // w_dual（2 本立ての加点）は既定では使わない。30 で修正前の versus に 45%（五分）・計算は 2〜3 倍、
+    // 100 では本線が弱くなり 28%。評価関数を dual_ojama などで調べるときの設定は dual_* を参照
     VersusOptions o;
+    o.beam.eval.w_dual = 0;
+    return o;
+}
+
+VersusOptions VersusOptions::from_map(const std::map<std::string, double>& m) {
+    VersusOptions o = VersusAI::default_options();
     for (const auto& [k, v] : m) {
         if (k == "accept") o.accept = static_cast<int>(v);
         else if (k == "w_ojama") o.w_ojama = v;
@@ -51,6 +63,13 @@ VersusOptions VersusOptions::from_map(const std::map<std::string, double>& m) {
         else if (k == "crush_depth") o.crush_depth = static_cast<int>(v);
         else if (k == "crush_check") o.crush_check = static_cast<int>(v);
         else if (k == "crush_until") o.crush_until = static_cast<int>(v);
+        else if (k == "counter_opp") o.counter_opp = static_cast<int>(v);
+        else if (k == "harass") o.harass = static_cast<int>(v);
+        else if (k == "harass_min") o.harass_min = static_cast<int>(v);
+        else if (k == "harass_min_chain") o.harass_min_chain = static_cast<int>(v);
+        else if (k == "harass_max_chain") o.harass_max_chain = static_cast<int>(v);
+        else if (k == "harass_keep") o.harass_keep = v;
+        else if (k == "harass_ratio") o.harass_ratio = v;
         else if (!o.beam.set(k, v)) throw std::invalid_argument("unknown option: " + k);
     }
     return o;
@@ -81,6 +100,15 @@ std::tuple<int, double, int> VersusAI::crush_plan(const Field& field, const std:
     const int opp_window = (opt_.crush_max_chain * ctx.chain_frames + ctx.hand_frames - 1) / ctx.hand_frames + 1;
     return {static_cast<int>(arg), expect,
             opponent_counter(opponent, ctx.opp_pairs, opp_window, opt_.crush_check == 1)};
+}
+
+int VersusAI::main_ojama(const Field& field, int min_chain) {
+    int best = 0;
+    for_each_trigger(field, [&](const Trigger& t) {
+        if (t.chains >= min_chain && field.is_reachable(Move{static_cast<int8_t>(t.x), 0}))
+            best = std::max(best, t.score / OJAMA_RATE);
+    });
+    return best;
 }
 
 int VersusAI::residual_ojama(const Field& field) {
@@ -144,9 +172,10 @@ Move VersusAI::decide(const Field& field, const std::vector<Pair>& known, const 
 
     // 2. 打ち返し
     if (ctx.incoming > opt_.accept && ctx.window >= 1 && ctx.window <= opt_.beam.depth) {
+        const int opp = opt_.counter_opp ? counter_potential(opponent) : 0;
         std::vector<double> v = beam_.expected_values(
             field, legal, known, ctx.window, remaining,
-            CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama, opt_.residual));
+            CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama, opt_.residual, opp));
         size_t arg = 0;
         for (size_t i = 1; i < legal.size(); ++i)
             if (v[i] > v[arg]) arg = i;
@@ -160,7 +189,28 @@ Move VersusAI::decide(const Field& field, const std::vector<Pair>& known, const 
         if (arg >= 0 && expect >= opt_.crush_min && opp < expect) return legal[arg];
     }
 
-    // 4. 組む
+    // 4. ちょっかい: 本線を残したまま小連鎖を撃ち、相手に本線を撃たせる（撃たなければ潰れる）
+    if (opt_.harass && ctx.incoming == 0 && main_ojama(field) > 0) {
+        const int opp_main = counter_potential(opponent);
+        const int opp_response = beam_.evaluator().dual_ojama(opponent);  // 相手が本線を残したまま返せる量
+        int best_h = -1, best_oj = 0;
+        const int my_main = main_ojama(field);
+        for (size_t i = 0; i < legal.size(); ++i) {
+            SimResult s = simulate(field, known[0], legal[i]);
+            if (s.chain.chains < opt_.harass_min_chain || s.chain.chains > opt_.harass_max_chain || s.field.is_dead())
+                continue;
+            const int oj = ojama(s.chain.score);
+            if (oj < opt_.harass_min || oj <= best_oj || oj <= opp_response) continue;
+            const int after = main_ojama(s.field);
+            if (after >= opt_.harass_keep * my_main && after >= opt_.harass_ratio * opp_main) {
+                best_h = static_cast<int>(i);
+                best_oj = oj;
+            }
+        }
+        if (best_h >= 0) return legal[best_h];
+    }
+
+    // 5. 組む
     return beam_.decide(field, known, -1, remaining);
 }
 

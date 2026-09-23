@@ -105,6 +105,12 @@ PYBIND11_MODULE(_puyocpp, m) {
     bind_sampling_ai<BeamAI, BeamOptions>(m, "BeamAI", "見えないツモの期待値を取るビームサーチ");
     bind_sampling_ai<MctsAI, MctsOptions>(m, "MctsAI", "見えないツモを推測し直す open-loop MCTS");
 
+    m.def("dual_ojama", [](const std::vector<std::string>& cols) {
+        return Evaluator(EvalOptions{}).dual_ojama(Field::from_cols(cols));
+    }, "本線（5 連鎖以上）を残したまま撃てる対応用の小連鎖のおじゃま");
+    m.def("main_ojama", [](const std::vector<std::string>& cols) { return VersusAI::main_ojama(Field::from_cols(cols)); },
+          "本線（5 連鎖以上）のおじゃまの見込み");
+
     py::class_<VersusAI>(m, "VersusAI", "対戦用 AI（打ち返し）")
         .def(py::init([](const std::map<std::string, double>& opts, uint64_t seed) {
                  return VersusAI(VersusOptions::from_map(opts), seed);
