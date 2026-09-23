@@ -23,8 +23,10 @@ class Script(AI):
         return self.moves.get(state.hand, Move(self.cols[state.hand % len(self.cols)], 0))
 
 
-def make_game(ai0, ai1, field0="", field1="", first="RR", max_hands=14):
-    g = VersusGame((ai0, ai1), seed=0, rules=VersusRules(max_hands=max_hands))
+def make_game(ai0, ai1, field0="", field1="", first="RR", max_hands=14, use_controller=False):
+    # タイミングを確かめるテストは 1 手 40f 固定のモードで行う
+    rules = VersusRules(max_hands=max_hands, use_controller=use_controller, hand_frames=40)
+    g = VersusGame((ai0, ai1), seed=0, rules=rules)
     g.tsumo._pairs = [Pair.parse(first)] + [Pair.parse(FILLER[i % 4]) for i in range(40)]
     if field0:
         g.players[0].field = Field.parse(field0)
@@ -91,3 +93,21 @@ def test_versus_cpp_options_and_short_match():
         cfg = MatchConfig("versus_cpp", "beam_cpp", {**small, **opts}, dict(small), rules=rules)
         r = play_match(cfg, 1)
         assert r.error is None and r.reason in ("max_hands", "dead")
+
+
+def test_hand_time_follows_operation_frames():
+    """操作時間モードでは、1 手の時間 = 実際の操作（キー入力＋落下＋接地＋ちぎり）のフレーム。"""
+    from puyo.controller import plan_operations
+
+    times = []
+
+    class Watch(Script):
+        def decide(self, state):
+            times.append((state.versus.now, state.field.copy(), self.moves.get(state.hand, Move(1, 0))))
+            return times[-1][2]
+
+    make_game(Watch({0: Move(1, 0), 1: Move(6, 1), 2: Move(3, 2)}), Script(cols=[5]), max_hands=4,
+              use_controller=True).run()
+    for (t0, f, m), (t1, _, _) in zip(times, times[1:]):
+        assert t1 - t0 == plan_operations(f)[m].frames
+    assert times[1][0] == plan_operations(Field())[Move(1, 0)].frames == 2 * 2 + 2 * 11 + 20  # ←← と 11 段落下

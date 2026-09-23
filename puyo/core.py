@@ -4,7 +4,8 @@
   - 列 x は左から 1..6、段 y は下から 1..13
   - (3, 12) が埋まると窒息（ゲームオーバー）
   - 13 段目のぷよは見えているが連鎖には参加しない
-  - 14 段目以上に行くぷよは消滅する（簡略化。実機の 14 段目の挙動は再現しない）
+  - 14 段目（画面外）に置いたぷよは残り続け、下が消えても落ちず、消えもしない（通の仕様）。
+    13 段目まで埋まった列に来たぷよは 14 段目に入り、14 段目も埋まっていれば消える
 """
 
 from __future__ import annotations
@@ -13,7 +14,8 @@ from dataclasses import dataclass, field
 from enum import IntEnum
 
 WIDTH = 6
-HEIGHT = 13  # 保持する段数（13 段目まで）
+HEIGHT = 13  # 重力で詰まる段数（13 段目まで）
+TOP_ROW = 14  # 画面外の 14 段目（置いたぷよは落ちずに残る）
 VISIBLE_HEIGHT = 12  # 連鎖判定に参加する段数
 DEATH_X, DEATH_Y = 3, 12
 SPAWN_X = 3
@@ -153,12 +155,14 @@ class ChainResult:
 
 
 class Field:
-    """6 列 × 13 段のフィールド。列ごとに下からのリストで持つ（重力で常に詰まっている）。"""
+    """6 列のフィールド。1〜13 段目は列ごとに下からのリスト（重力で常に詰まっている）、
+    14 段目は top に別に持つ（落ちずに残るため）。"""
 
-    __slots__ = ("cols",)
+    __slots__ = ("cols", "top")
 
-    def __init__(self, cols: list[list[Color]] | None = None):
+    def __init__(self, cols: list[list[Color]] | None = None, top: list[Color] | None = None):
         self.cols: list[list[Color]] = cols if cols is not None else [[] for _ in range(WIDTH)]
+        self.top: list[Color] = top if top is not None else [Color.EMPTY] * WIDTH
 
     # --- 生成・入出力 -------------------------------------------------------
 
@@ -167,30 +171,35 @@ class Field:
         """書籍の表記（上の段から、R/G/B/Y/O/.）からフィールドを作る。
 
         上部の空行は省略可。各行は 6 文字で、改行か "/" で区切る。浮いているぷよは下に落とす。
+        14 行あれば 1 行目が 14 段目（落ちずにその場に残る）。
         """
         lines = [ln.strip() for ln in text.replace("/", "\n").strip().splitlines() if ln.strip()]
-        if len(lines) > HEIGHT:
+        if len(lines) > TOP_ROW:
             raise ValueError(f"too many rows: {len(lines)}")
         f = cls()
-        for line in reversed(lines):
+        for y, line in enumerate(reversed(lines), start=1):
             if len(line) != WIDTH:
                 raise ValueError(f"row must have {WIDTH} chars: {line!r}")
             for i, c in enumerate(line):
                 color = Color.from_char(c)
-                if color != Color.EMPTY:
+                if color == Color.EMPTY:
+                    continue
+                if y == TOP_ROW:
+                    f.top[i] = color
+                else:
                     f.cols[i].append(color)
         return f
 
     def copy(self) -> Field:
-        return Field([list(c) for c in self.cols])
+        return Field([list(c) for c in self.cols], list(self.top))
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Field) and self.cols == other.cols
+        return isinstance(other, Field) and self.cols == other.cols and self.top == other.top
 
     def __hash__(self) -> int:
-        return hash(tuple(tuple(c) for c in self.cols))
+        return hash((tuple(tuple(c) for c in self.cols), tuple(self.top)))
 
-    def to_rows(self, height: int = HEIGHT) -> list[str]:
+    def to_rows(self, height: int = TOP_ROW) -> list[str]:
         rows = []
         for y in range(height, 0, -1):
             rows.append("".join(self.get(x, y).char for x in range(1, WIDTH + 1)))
@@ -203,16 +212,30 @@ class Field:
         return "\n".join(rows) if rows else "." * WIDTH
 
     def to_json(self) -> list[str]:
-        """列ごとの文字列（下から）。リプレイ保存用。"""
-        return ["".join(c.char for c in col) for col in self.cols]
+        """列ごとの文字列（下から）。14 段目にぷよがあれば 13 文字目まで "." で埋めて 14 文字目に色。"""
+        out = []
+        for col, top in zip(self.cols, self.top):
+            s = "".join(c.char for c in col)
+            if top != Color.EMPTY:
+                s = s.ljust(HEIGHT, ".") + top.char
+            out.append(s)
+        return out
 
     @classmethod
     def from_json(cls, data: list[str]) -> Field:
-        return cls([[Color.from_char(c) for c in col] for col in data])
+        f = cls()
+        for i, s in enumerate(data):
+            if len(s) > HEIGHT:
+                f.top[i] = Color.from_char(s[HEIGHT])
+                s = s[:HEIGHT]
+            f.cols[i] = [Color.from_char(c) for c in s.rstrip(".")]
+        return f
 
     # --- 参照 ---------------------------------------------------------------
 
     def get(self, x: int, y: int) -> Color:
+        if y == TOP_ROW:
+            return self.top[x - 1]
         col = self.cols[x - 1]
         return col[y - 1] if y <= len(col) else Color.EMPTY
 
@@ -224,29 +247,31 @@ class Field:
 
     def count(self, color: Color | None = None) -> int:
         if color is None:
-            return sum(len(c) for c in self.cols)
-        return sum(c.count(color) for c in self.cols)
+            return sum(len(c) for c in self.cols) + sum(t != Color.EMPTY for t in self.top)
+        return sum(c.count(color) for c in self.cols) + self.top.count(color)
 
     def is_dead(self) -> bool:
         return self.height(DEATH_X) >= DEATH_Y
 
     def is_empty(self) -> bool:
-        return all(not c for c in self.cols)
+        return all(not c for c in self.cols) and all(t == Color.EMPTY for t in self.top)
 
     # --- 設置 ---------------------------------------------------------------
 
     def is_reachable(self, move: Move) -> bool:
-        """3 列目から目的の列まで組ぷよを運べるか（簡略版）。
+        """組ぷよを実際の操作（移動・回転・壁蹴り・床蹴り・クイックターン）でその位置まで運べるか。
 
-        経路上（3 列目〜軸・子の列）の各列について 13 段目が空いていれば通れるとみなす。
-        実機の「回し」による 13 段越えは考慮しない。
+        詳しくは puyo/controller.py。12 段以上の列が無ければどこでも置ける。
         """
-        lo = min(SPAWN_X, move.x, move.child_x)
-        hi = max(SPAWN_X, move.x, move.child_x)
-        return all(self.height(x) < HEIGHT for x in range(lo, hi + 1))
+        from .controller import reachable_moves
+
+        return move in reachable_moves(self)
 
     def legal_moves(self, pair: Pair) -> list[Move]:
-        return [m for m in moves_for(pair) if self.is_reachable(m)]
+        from .controller import reachable_moves
+
+        ok = reachable_moves(self)
+        return [m for m in moves_for(pair) if m in ok]
 
     def place(self, pair: Pair, move: Move) -> int:
         """組ぷよを置く（連鎖はしない）。ちぎりが発生した段差を返す（0 ならちぎり無し）。"""
@@ -269,7 +294,9 @@ class Field:
         col = self.cols[x - 1]
         if len(col) < HEIGHT:
             col.append(color)
-        # 14 段目以上は消滅
+        elif self.top[x - 1] == Color.EMPTY:
+            self.top[x - 1] = color  # 14 段目に入って残る
+        # 14 段目も埋まっていれば消える
 
     def drop_ojama(self, n: int, rng=None) -> None:
         """おじゃまぷよを n 個降らせる（6 個ごとに 1 段、端数はランダムな列）。"""

@@ -49,7 +49,8 @@ class GameRecord:
 def run_game(cfg: BenchConfig, game_seed: int, keep_history: bool = False) -> tuple[GameRecord, Tokopuyo]:
     ai = load_ai_class(cfg.ai)(seed=game_seed, **(cfg.ai_options or {}))
     game = Tokopuyo(
-        seed=game_seed, tsumo_mode=cfg.tsumo_mode, visible_nexts=cfg.visible_nexts, max_hands=cfg.max_hands
+        seed=game_seed, tsumo_mode=cfg.tsumo_mode, visible_nexts=cfg.visible_nexts, max_hands=cfg.max_hands,
+        record_ops=keep_history,
     )
     max_chain = max_score = 0
     target_hand = None
@@ -183,3 +184,17 @@ def format_summary(cfg: BenchConfig, s: Summary) -> str:
 
 def records_to_json(cfg: BenchConfig, records: list[GameRecord], summary: Summary) -> dict:
     return {"config": asdict(cfg), "summary": asdict(summary), "games": [asdict(r) for r in records]}
+
+
+def record_game(args) -> dict:
+    """1 ゲームを記録してリプレイ HTML を書き出し、一覧ページ用の要約を返す（並列実行用）。"""
+    from pathlib import Path
+
+    from .replay import build_replay, write_replay
+
+    cfg, seed, out = args
+    rec, game = run_game(cfg, seed, keep_history=True)
+    write_replay(build_replay(game, cfg.ai), out)
+    fires = [(st.hand + 1, st.chain.chains, st.chain.score) for st in game.history if st.chain.chains]
+    return {"file": Path(out).name, "seed": seed, "max_chain": rec.max_chain, "max_score": rec.max_score,
+            "hands": rec.hands, "died": rec.died, "target_hand": rec.target_hand, "fires": fires}

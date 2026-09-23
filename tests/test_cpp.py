@@ -22,6 +22,9 @@ def random_field(rng: random.Random) -> Field:
         h = rng.randint(0, 13)
         cols.append("".join(rng.choice(COLORS + "O" if rng.random() < 0.1 else COLORS) for _ in range(h)))
     f = Field.from_json(cols)
+    for i in range(6):  # 13 段の列の一部は 14 段目にもぷよを置く
+        if len(f.cols[i]) == 13 and rng.random() < 0.5:
+            f.top[i] = Color(rng.randint(1, 4))
     f.resolve_chain()
     return f
 
@@ -148,3 +151,14 @@ def test_versus_ai_new_options():
     assert 1 <= x <= 6
     with pytest.raises(Exception):
         cpp.VersusAI({"harass_margin": 1.0}, 0)  # 廃止したオプション
+
+
+def test_controller_matches_python():
+    from puyo.controller import Controller
+
+    rng = random.Random(3)
+    for _ in range(2000):
+        h = [rng.choice([0, 3, 8, 10, 11, 12, 13]) for _ in range(6)]
+        top = [hh == 13 and rng.random() < 0.3 for hh in h]
+        py = [(m.x, m.rot, op.keys, op.frames) for m, op in Controller(h, top).plan().items()]
+        assert cpp.plan_operations(h, top) == py

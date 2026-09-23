@@ -74,7 +74,29 @@ def cmd_bench(a: argparse.Namespace) -> None:
         print(f"結果を保存: {a.out}")
 
 
+def cmd_play_many(a: argparse.Namespace) -> None:
+    from concurrent.futures import ProcessPoolExecutor
+
+    from .bench import record_game
+    from .replay import write_replays_home, write_toko_index
+
+    cfg = _config(a)
+    tag = time.strftime("%Y%m%d_%H%M%S")
+    outdir = Path(a.out or f"replays/toko_{a.ai.replace(':', '_').replace('.', '_')}_{tag}")
+    outdir.mkdir(parents=True, exist_ok=True)
+    tasks = [(cfg, a.seed + i, str(outdir / f"seed{a.seed + i}.html")) for i in range(a.games)]
+    with ProcessPoolExecutor(max_workers=a.jobs) as ex:
+        entries = list(ex.map(record_game, tasks))
+    index = write_toko_index(entries, f"{a.ai} {cfg.ai_options or ''}", f"とこぷよリプレイ一覧（{tag}）", outdir / "index.html")
+    home = write_replays_home(outdir.parent)
+    print(f"{len(entries)} ゲームのリプレイ: {index}\nリプレイ置き場: {home}")
+    if a.open:
+        os.system(f"open '{index}'")
+
+
 def cmd_play(a: argparse.Namespace) -> None:
+    if a.games > 1:
+        return cmd_play_many(a)
     cfg = _config(a)
     rec, game = run_game(cfg, a.seed, keep_history=True)
     if a.verbose:
@@ -191,7 +213,7 @@ def _add_versus_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--mode", default="ac", choices=TSUMO_MODES)
     p.add_argument("--nexts", type=int, default=2)
-    p.add_argument("--hand-frames", type=int, default=40, help="1 手にかかるフレーム")
+    p.add_argument("--hand-frames", type=int, default=50, help="1 手の平均フレーム（AI の見積もり用）")
     p.add_argument("--chain-frames", type=int, default=60, help="連鎖 1 段にかかるフレーム")
     p.add_argument("--max-rows", type=int, default=6, help="おじゃまが 1 回に降る最大段数")
     p.add_argument("--max-hands", type=int, default=250, help="この手数で引き分け")
@@ -209,9 +231,11 @@ def main(argv: list[str] | None = None) -> None:
     b.add_argument("-o", "--out", help="結果 JSON の保存先")
     b.set_defaults(func=cmd_bench)
 
-    p = sub.add_parser("play", help="1 ゲーム実行してリプレイを出力する")
+    p = sub.add_parser("play", help="とこぷよのリプレイを出力する（-n で複数ゲーム＋一覧ページ）")
     _add_common(p)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("-n", "--games", type=int, default=1, help="ゲーム数（2 以上なら一覧ページも作る）")
+    p.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
     p.add_argument("-o", "--out", help="出力先（.html または .json）")
     p.add_argument("-v", "--verbose", action="store_true", help="毎手のフィールドを表示")
     p.add_argument("--open", action="store_true", help="出力した HTML をブラウザで開く")

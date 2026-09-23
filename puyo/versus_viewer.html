@@ -19,10 +19,13 @@
   .pname { font-weight: 600; }
   .pname.win::after { content: " 勝ち"; color: var(--accent); }
   .row { display: flex; gap: 8px; align-items: flex-start; }
-  .field { display: grid; grid-template-columns: repeat(6, 28px); grid-template-rows: repeat(13, 28px); gap: 2px;
+  .field { display: grid; grid-template-columns: repeat(6, 28px); grid-template-rows: repeat(14, 28px); gap: 2px;
            background: var(--panel); padding: 5px; border-radius: 8px; border: 1px solid var(--line); }
   .cell { border-radius: 50%; position: relative; }
   .cell.row13 { opacity: .45; }
+  .cell.row14 { opacity: .3; }
+  .cell.moving { box-shadow: 0 0 0 2px #fff; opacity: 1; }
+  .oplbl { min-height: 20px; font-size: 13px; color: var(--muted); }
   .cell.death::before { content: "×"; position: absolute; inset: 0; display: grid; place-items: center; color: #e8464b88; font-weight: bold; }
   .p-R { background: var(--R); } .p-G { background: var(--G); } .p-B { background: var(--B); }
   .p-Y { background: var(--Y); } .p-O { background: var(--O); border-radius: 30%; }
@@ -75,10 +78,10 @@ function buildBoards() {
   for (let p = 0; p < 2; p++) {
     const root = document.createElement("div");
     root.className = "player";
-    root.innerHTML = `<div class="pname"></div><div class="incoming"></div><div class="chainlbl"></div>
+    root.innerHTML = `<div class="pname"></div><div class="incoming"></div><div class="chainlbl"></div><div class="oplbl"></div>
       <div class="row"><div class="field"></div><div class="nexts"></div></div><div class="stat"></div>`;
     const field = root.querySelector(".field"), cells = {};
-    for (let y = 13; y >= 1; y--) for (let x = 1; x <= 6; x++) {
+    for (let y = 14; y >= 1; y--) for (let x = 1; x <= 6; x++) {
       const d = document.createElement("div");
       field.appendChild(d); cells[x + "," + y] = d;
     }
@@ -91,6 +94,9 @@ function buildBoards() {
     boards.push({ root, cells, nextEls });
   }
 }
+
+const DX = [0, 1, 0, -1], DY = [1, 0, -1, 0];
+const rowClass = (y) => (y === 14 ? " row14" : y === 13 ? " row13" : "");
 
 function pairEl(el, pair) {
   el.innerHTML = "";
@@ -133,17 +139,28 @@ function render() {
     const field = s ? s.field : ["", "", "", "", "", ""];
     const erase = new Set((s?.erase || []).map(([x, y]) => x + "," + y));
     const placed = new Set();
+    const moving = {};
+    if (s && s.moving) {
+      const m = s.moving;
+      moving[m.x + "," + m.y] = m.pair[0];
+      moving[(m.x + DX[m.r]) + "," + (m.y + DY[m.r])] = m.pair[1];
+    }
     if (s && s.move && s.t === t) {
       const [mx, rot] = s.move, cx = mx + (rot === 1 ? 1 : rot === 3 ? -1 : 0);
-      const h = (x) => field[x - 1].length;
+      const h = (x) => field[x - 1].replace(/\.+.$/, "").length;
       if (mx === cx) { placed.add(`${mx},${h(mx)}`); placed.add(`${mx},${h(mx) - 1}`); }
       else { placed.add(`${mx},${h(mx)}`); placed.add(`${cx},${h(cx)}`); }
     }
-    for (let x = 1; x <= 6; x++) for (let y = 1; y <= 13; y++) {
-      const k = x + "," + y, c = field[x - 1][y - 1];
-      b.cells[k].className = "cell" + (y === 13 ? " row13" : "") + (x === 3 && y === 12 && !c ? " death" : "") +
-        (c ? " p-" + c : "") + (erase.has(k) ? " erase" : "") + (placed.has(k) ? " placed" : "");
+    for (let x = 1; x <= 6; x++) for (let y = 1; y <= 14; y++) {
+      const k = x + "," + y, mv = moving[k];
+      let c = field[x - 1][y - 1];
+      if (c === ".") c = undefined;
+      b.cells[k].className = "cell" + rowClass(y) + (x === 3 && y === 12 && !c && !mv ? " death" : "") +
+        (mv ? " p-" + mv + " moving" : c ? " p-" + c : "") + (erase.has(k) ? " erase" : "") + (placed.has(k) ? " placed" : "");
     }
+    // 直近の置き方と操作（例: "RG 3^ ←↻↓"）
+    const lastPlace = [...p.snapshots].reverse().find((q) => q.t <= t && q.move);
+    b.root.querySelector(".oplbl").textContent = lastPlace ? lastPlace.label : "";
     (s ? s.pairs : []).forEach((pp, j) => pairEl(b.nextEls[j], pp));
     const n = inc ? inc.v[i] : 0;
     b.root.querySelector(".incoming").innerHTML = n ? `おじゃま予告 <b>${n}</b>（${(n / 6).toFixed(1)} 段）` : "";

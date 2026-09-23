@@ -96,11 +96,24 @@ def test_vertical_placement_order():
     assert f.get(2, 1) == Color.BLUE and f.get(2, 2) == Color.RED
 
 
-def test_row14_discarded():
-    f = Field.parse("\n".join(("B" if y % 2 else "G") + "....." for y in range(12)))
-    assert f.height(1) == 12
-    f.place(Pair.parse("RY"), Move(1, 0))
-    assert f.height(1) == 13 and f.get(1, 13) == Color.RED
+def test_row14_puyo_stays_and_never_falls():
+    # 1 列目が 13 段。1〜2 列目に横置きすると、1 列目のぷよは 14 段目に入って残る
+    f = Field.parse("\n".join(("B" if y % 2 else "G") + "....." for y in range(13)))
+    assert f.height(1) == 13
+    f.place(Pair.parse("RY"), Move(1, 1))
+    assert f.get(1, 14) == Color.RED and f.height(1) == 13 and f.get(2, 1) == Color.YELLOW
+    assert Field.from_json(f.to_json()) == f and f.to_json()[0].endswith("R") and len(f.to_json()[0]) == 14
+    # 14 段目も埋まっている列に来たぷよは消える
+    g = f.copy()
+    g.place(Pair.parse("GG"), Move(1, 1))
+    assert g.get(1, 14) == Color.RED and g.count() == f.count() + 1
+    # 下が消えても 14 段目のぷよは落ちない
+    h = Field.parse("R....." + "\n" + "\n".join("B....." if y % 2 else "Y....." for y in range(12)) + "\nGGG...")
+    h.cols[0][0] = Color.GREEN  # 1 段目 1 列目を G にして GGG + G で消えるように
+    assert h.get(1, 14) == Color.RED
+    after, chain, _ = simulate(h, Pair.parse("GB"), Move(4, 0))
+    assert chain.chains >= 1 and after.height(1) == 12 and after.get(1, 14) == Color.RED
+    assert after.get(1, 13) == Color.EMPTY  # 13 段目は空いたが、14 段目のぷよは落ちてこない
 
 
 def test_reachability_and_death():

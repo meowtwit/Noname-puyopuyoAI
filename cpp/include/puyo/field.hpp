@@ -11,7 +11,8 @@
 namespace puyo {
 
 constexpr int WIDTH = 6;
-constexpr int HEIGHT = 13;          // 保持する段数
+constexpr int HEIGHT = 13;          // 重力で詰まる段数（14 段目は落ちずに残る画面外）
+constexpr int TOP_ROW = 14;
 constexpr int VISIBLE_HEIGHT = 12;  // 連鎖判定に参加する段数
 
 // 3 枚のビット面で表す色コード（色ぷよは bit2 が立つ）
@@ -48,14 +49,16 @@ struct ChainResult {
 class Field {
 public:
     Field() = default;
-    // 列ごとの文字列（下から、Python の Field.to_json() と同じ形式）
+    // 列ごとの文字列（下から、Python の Field.to_json() と同じ形式。14 段目は 13 文字目まで "." で埋めて 14 文字目）
     static Field from_cols(const std::vector<std::string>& cols);
     std::vector<std::string> to_cols() const;
 
     Bits occupied() const { return p_[0] | p_[1] | p_[2]; }
     Bits plane(Color c) const;
     Color get(int x, int y) const;
-    int height(int x) const { return std::popcount(occupied().lane(x)); }
+    // 1〜13 段目の高さ（14 段目は含まない）
+    int height(int x) const { return std::popcount(occupied().lane(x) & 0x3FFEu); }
+    bool top(int x) const { return occupied().test(x, TOP_ROW); }  // 14 段目にぷよが残っているか
     int count() const { return occupied().popcount(); }
     bool is_dead() const { return occupied().test(3, 12); }
     bool is_empty() const { return occupied().empty(); }
@@ -69,10 +72,11 @@ public:
         return h ^ (h >> 31);
     }
 
+    // 実際の操作（移動・回転・蹴り・クイックターン）でその位置まで運べるか（controller.hpp）
     bool is_reachable(Move m) const;
     // 置いて連鎖は起こさない。ちぎり段差を返す
     int place(const Pair& pair, Move m);
-    void drop(int x, Color c);  // 1 個落とす（14 段目以上は消滅）
+    void drop(int x, Color c);  // 1 個落とす（13 段目まで埋まっていれば 14 段目へ。そこも埋まっていれば消える）
     bool connects4(int x, int y) const;
     ChainResult resolve_chain();
 

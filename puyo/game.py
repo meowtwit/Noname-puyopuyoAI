@@ -36,6 +36,9 @@ class StepResult:
     tear: int  # ちぎり段差
     dead: bool
     think_ms: float = 0.0
+    keys: str = ""  # 実際の操作（puyo/controller.py。record_ops のときだけ）
+    frames: int = 0  # 操作にかかったフレーム
+    path: list | None = None  # 操作の途中の組ぷよの状態 (x, y, r)
 
 
 @dataclass
@@ -44,6 +47,7 @@ class Tokopuyo:
     tsumo_mode: str = "ac"
     visible_nexts: int = 2
     max_hands: int | None = None
+    record_ops: bool = False  # 毎手の操作（キー列）を求めて記録する（リプレイ用）
     field: Field = dc_field(default_factory=Field)
     hand: int = 0
     score: int = 0
@@ -69,13 +73,23 @@ class Tokopuyo:
         pair = self.tsumo.get(self.hand)
         if not self.field.is_reachable(move):
             raise IllegalMove(f"hand {self.hand}: move {move} is not reachable")
+        op = None
+        if self.record_ops:
+            from .controller import operation_path, plan_operations
+
+            op = plan_operations(self.field)[move]
+            path = operation_path(self.field, op)
         placed = self.field.copy()
         placed.place(pair, move)
+        before = self.field
         after, chain, tear = simulate(self.field, pair, move)
         self.field = after
         self.score += chain.score
         self.dead = after.is_dead()
         res = StepResult(self.hand, pair, move, placed, after, chain, tear, self.dead)
+        if op is not None:
+            res.keys, res.frames, res.path = op.keys, op.frames, path
+            res.before = before
         self.history.append(res)
         self.hand += 1
         return res

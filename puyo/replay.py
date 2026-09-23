@@ -12,9 +12,18 @@ VIEWER_TEMPLATE = Path(__file__).with_name("viewer.html")
 
 def build_replay(game: Tokopuyo, ai_name: str) -> dict:
     """1 手ごとに「設置 → (消去 → 落下) × 連鎖数」のフレーム列を作る。"""
+    from .controller import pretty_keys
+
     steps = []
     for st in game.history:
-        frames = [{"field": st.placed.to_json(), "erase": [], "label": "設置"}]
+        frames = []
+        # 操作: 組ぷよがキー列どおりに動く様子（出現位置 → … → 落とす直前）
+        before = getattr(st, "before", None)
+        if st.path and before is not None:
+            for i, (x, y, r) in enumerate(st.path):
+                frames.append({"field": before.to_json(), "erase": [], "label": "操作" if i else "出現",
+                               "moving": {"x": x, "y": y, "r": r, "pair": str(st.pair)}})
+        frames.append({"field": st.placed.to_json(), "erase": [], "label": "設置"})
         f = st.placed.copy()
         for cs in st.chain.steps:
             frames.append({"field": f.to_json(), "erase": cs.erased, "label": f"{cs.chain}連鎖"})
@@ -25,6 +34,8 @@ def build_replay(game: Tokopuyo, ai_name: str) -> dict:
                 "hand": st.hand,
                 "pair": str(st.pair),
                 "move": {"x": st.move.x, "rot": st.move.rot, "str": str(st.move)},
+                "keys": pretty_keys(st.keys) if st.path else "",
+                "op_frames": st.frames,
                 "nexts": [str(game.tsumo.get(st.hand + i + 1)) for i in range(game.visible_nexts)],
                 "chain": st.chain.chains,
                 "score": st.chain.score,
@@ -136,3 +147,33 @@ li div {{ color:var(--muted); font-size:12px; }} a {{ color:#7fb0ff; font-weight
     out = root / "index.html"
     out.write_text(page)
     return out
+
+
+def write_toko_index(entries: list[dict], name: str, title: str, path: str | Path) -> Path:
+    """とこぷよリプレイの一覧ページ。"""
+    import html as _html
+
+    path = Path(path)
+    rows = []
+    for e in entries:
+        fires = " → ".join(f"{h}手目 {c}連鎖" for h, c, _ in e["fires"])
+        state = "窒息" if e["died"] else ("目標達成" if e["target_hand"] is not None else "")
+        rows.append(f"<tr><td><a href='{_html.escape(e['file'])}'>seed {e['seed']}</a></td><td>{e['max_chain']}</td>"
+                    f"<td>{e['max_score']}</td><td>{e['hands']}</td><td>{state}</td><td class='f'>{_html.escape(fires)}</td></tr>")
+    chains = sorted(e["max_chain"] for e in entries)
+    page = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>とこぷよリプレイ一覧</title>
+<style>
+:root {{ --bg:#14161c; --text:#e7e9ee; --muted:#8a90a0; --line:#2d313c; }}
+body {{ margin:0; background:var(--bg); color:var(--text); font:14px/1.5 system-ui,-apple-system,"Hiragino Sans",sans-serif; }}
+main {{ max-width:1000px; margin:0 auto; padding:16px; }} h1 {{ font-size:16px; margin:0 0 4px; }}
+.sub {{ color:var(--muted); font-size:12px; margin-bottom:12px; }}
+table {{ width:100%; border-collapse:collapse; }} th, td {{ padding:6px 8px; border-bottom:1px solid var(--line); text-align:left; }}
+th {{ color:var(--muted); font-weight:500; font-size:12px; }} a {{ color:#7fb0ff; }} td.f {{ font-size:12px; color:var(--muted); }}
+</style></head><body><main><h1>{_html.escape(title)}</h1>
+<div class="sub">{_html.escape(name)} ・ {len(entries)} ゲーム ・ 最大連鎖の中央値 {chains[len(chains) // 2] if chains else '-'}。
+リプレイでは組ぷよがキー操作どおりに動く様子（回しで登る動きなど）もコマ送りで見られる。</div>
+<table><tr><th>リプレイ</th><th>最大連鎖</th><th>最大得点</th><th>手数</th><th>結果</th><th>発火</th></tr>
+{"".join(rows)}</table></main></body></html>"""
+    path.write_text(page)
+    return path

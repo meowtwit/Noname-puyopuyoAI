@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "puyo/beam.hpp"
+#include "puyo/controller.hpp"
 #include "puyo/detect.hpp"
 #include "puyo/lookahead.hpp"
 #include "puyo/mcts.hpp"
@@ -104,6 +105,19 @@ PYBIND11_MODULE(_puyocpp, m) {
 
     bind_sampling_ai<BeamAI, BeamOptions>(m, "BeamAI", "見えないツモの期待値を取るビームサーチ");
     bind_sampling_ai<MctsAI, MctsOptions>(m, "MctsAI", "見えないツモを推測し直す open-loop MCTS");
+
+    m.def("plan_operations", [](const std::vector<int>& heights, const std::vector<bool>& top) {
+        Shape sh;
+        for (int i = 0; i < WIDTH; ++i) {
+            sh.h[i] = heights.at(i);
+            if (!top.empty() && top.at(i)) sh.top |= static_cast<uint8_t>(1u << i);
+        }
+        py::list out;
+        for (const Operation& op : plan_operations(sh))
+            out.append(py::make_tuple(int(op.move.x), int(op.move.rot), op.keys, op.frames));
+        return out;
+    }, py::arg("heights"), py::arg("top") = std::vector<bool>{},
+       "列の高さ（と 14 段目が埋まっている列）から、置ける場所ごとの最短の操作 (x, rot, キー列, フレーム) を返す");
 
     m.def("dual_ojama", [](const std::vector<std::string>& cols) {
         return Evaluator(EvalOptions{}).dual_ojama(Field::from_cols(cols));

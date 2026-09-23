@@ -1,5 +1,7 @@
 #include "puyo/field.hpp"
 
+#include "puyo/controller.hpp"
+
 #include <algorithm>
 #include <stdexcept>
 
@@ -73,11 +75,19 @@ Field Field::from_cols(const std::vector<std::string>& cols) {
     Field f;
     for (int x = 1; x <= WIDTH; ++x) {
         const std::string& s = cols[x - 1];
-        if (static_cast<int>(s.size()) > HEIGHT) throw std::invalid_argument("column too tall");
-        for (char ch : s) {
-            Color c = color_from_char(ch);
-            if (c == EMPTY) throw std::invalid_argument("empty inside column");
-            f.drop(x, c);
+        if (static_cast<int>(s.size()) > TOP_ROW) throw std::invalid_argument("column too tall");
+        bool gap = false;
+        for (int i = 0; i < static_cast<int>(s.size()); ++i) {
+            Color c = color_from_char(s[i]);
+            if (c == EMPTY) {  // "." は 14 段目の下の空きだけ
+                gap = true;
+                continue;
+            }
+            if (gap && i != TOP_ROW - 1) throw std::invalid_argument("empty inside column");
+            Bits b = Bits::bit(x, i + 1);
+            if (c & 1) f.p_[0] = f.p_[0] | b;
+            if (c & 2) f.p_[1] = f.p_[1] | b;
+            if (c & 4) f.p_[2] = f.p_[2] | b;
         }
     }
     return f;
@@ -88,6 +98,10 @@ std::vector<std::string> Field::to_cols() const {
     for (int x = 1; x <= WIDTH; ++x) {
         int h = height(x);
         for (int y = 1; y <= h; ++y) out[x - 1].push_back(color_to_char(get(x, y)));
+        if (top(x)) {
+            out[x - 1].resize(HEIGHT, '.');
+            out[x - 1].push_back(color_to_char(get(x, TOP_ROW)));
+        }
     }
     return out;
 }
@@ -106,19 +120,20 @@ Color Field::get(int x, int y) const {
 
 void Field::drop(int x, Color c) {
     int h = height(x);
-    if (h >= HEIGHT) return;
-    Bits b = Bits::bit(x, h + 1);
+    int y = h + 1;
+    if (h >= HEIGHT) {
+        if (top(x)) return;  // 14 段目も埋まっていれば消える
+        y = TOP_ROW;
+    }
+    Bits b = Bits::bit(x, y);
     if (c & 1) p_[0] = p_[0] | b;
     if (c & 2) p_[1] = p_[1] | b;
     if (c & 4) p_[2] = p_[2] | b;
 }
 
 bool Field::is_reachable(Move m) const {
-    int lo = std::min({3, int(m.x), m.child_x()});
-    int hi = std::max({3, int(m.x), m.child_x()});
-    for (int x = lo; x <= hi; ++x)
-        if (height(x) >= HEIGHT) return false;
-    return true;
+    int i = move_index(m);
+    return i >= 0 && ((reachable_mask(*this) >> i) & 1);
 }
 
 int Field::place(const Pair& pair, Move m) {
@@ -152,8 +167,10 @@ void Field::remove_and_fall(Bits erase) {
     for (int i = 0; i < 3; ++i) p_[i].to_lanes(lanes[i]);
     for (int x = 1; x <= WIDTH; ++x) {
         if (!er[x]) continue;
-        uint32_t keep = occ[x] & ~er[x] & 0xFFFE;
-        for (int i = 0; i < 3; ++i) lanes[i][x] = static_cast<uint16_t>(pext16(lanes[i][x], keep) << 1);
+        // 1〜13 段目だけを詰める。14 段目のぷよは落ちずにその場に残る
+        uint32_t keep = occ[x] & ~er[x] & 0x3FFEu;
+        for (int i = 0; i < 3; ++i)
+            lanes[i][x] = static_cast<uint16_t>((pext16(lanes[i][x], keep) << 1) | (lanes[i][x] & 0x4000u));
     }
     for (int i = 0; i < 3; ++i) p_[i] = Bits::from_lanes(lanes[i]);
 }
@@ -212,8 +229,9 @@ SimResult simulate(const Field& f, const Pair& pair, Move m) {
 
 std::vector<Move> legal_moves(const Field& f, const Pair& pair) {
     std::vector<Move> out;
+    const uint32_t mask = reachable_mask(f);
     for (Move m : moves_for(pair))
-        if (f.is_reachable(m)) out.push_back(m);
+        if ((mask >> move_index(m)) & 1) out.push_back(m);
     return out;
 }
 

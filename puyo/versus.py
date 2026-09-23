@@ -2,8 +2,8 @@
 
 ルール:
   - 2 人とも同じツモ列を使う（ぷよぷよ通と同じ）
-  - 時間はフレーム単位で進む。1 手 hand_frames（ちぎりは +tear_frames）、連鎖 1 段 chain_frames、
-    おじゃまの落下 ojama_frames。既定値は書籍の「N 連鎖の間に約 1.5N 手置ける」に合わせている
+  - 時間はフレーム単位で進む。1 手は実際の操作（puyo/controller.py: キー入力 2f・落下 1 段 2f・接地 20f・ちぎり）にかかる
+    フレーム（use_controller=False なら固定の hand_frames ＋ ちぎり tear_frames）。連鎖 1 段 chain_frames、おじゃまの落下 ojama_frames
   - 連鎖の各段の得点を ojama_rate 点で 1 個のおじゃまに換算（端数は次の連鎖に持ち越し）。
     自分に来る予定のおじゃまがあれば先に相殺し、残りを相手に送る
   - おじゃまは、相手の連鎖がすべて終わった後に置いた 1 手の後に降る（自分がその手で連鎖したら連鎖の後）。
@@ -28,7 +28,7 @@ from .tsumo import TsumoGenerator
 
 @dataclass(frozen=True)
 class VersusRules:
-    hand_frames: int = 40
+    hand_frames: int = 50  # 1 手の平均（操作時間モードでは AI の見積もり用。実測の平均は約 50f）
     tear_frames: int = 20
     chain_frames: int = 60
     ojama_frames: int = 30
@@ -37,6 +37,7 @@ class VersusRules:
     max_hands: int = 250
     visible_nexts: int = 2
     tsumo_mode: str = "ac"
+    use_controller: bool = True  # 1 手の時間を実際の操作から求める（hand_frames は AI の見積もり用の平均）
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class PlayerStats:
     sent: int = 0  # 相手に送った（相殺で消えた分も含む）おじゃま
     received: int = 0  # 実際に降ってきたおじゃま
     fires: int = 0
+    op_frames: int = 0  # 操作にかかったフレームの合計
 
 
 @dataclass
@@ -203,8 +205,22 @@ class VersusGame:
         tear = placed.place(pair, move)
         after = placed.copy()
         chain = after.resolve_chain()
-        t_placed = self.now + r.hand_frames + (r.tear_frames if tear else 0)
-        self._snap(p, self.now, placed, label=f"{pair} {move}", move=(move.x, move.rot))
+        if r.use_controller:
+            from .controller import KEY_FRAMES, operation_path, plan_operations, pretty_keys
+
+            op = plan_operations(p.field)[move]
+            t_placed = self.now + op.frames
+            p.stats.op_frames += op.frames
+            if self.record:  # 操作中の組ぷよ（キー 1 回 2f ごと）
+                for i, (x, y, rr) in enumerate(operation_path(p.field, op)):
+                    self._snap(p, self.now + i * KEY_FRAMES, p.field, label="操作",
+                               moving={"x": x, "y": y, "r": rr, "pair": str(pair)})
+            label = f"{pair} {move} {pretty_keys(op.keys)}"
+            t_land = t_placed - 20  # 接地の瞬間（接地の 20f の前）
+        else:
+            t_placed = self.now + r.hand_frames + (r.tear_frames if tear else 0)
+            label, t_land = f"{pair} {move}", self.now
+        self._snap(p, t_land, placed, label=label, move=(move.x, move.rot))
         p.hand += 1
 
         if chain.chains:
@@ -251,14 +267,15 @@ class VersusGame:
         p.phase = "decide"
         p.t_next = t
 
-    def _snap(self, p: _Player, t: int, f: Field, erase=(), label: str = "", move=None) -> None:
+    def _snap(self, p: _Player, t: int, f: Field, erase=(), label: str = "", move=None, moving=None) -> None:
         if not self.record:
             return
         nexts = [str(self.tsumo.get(p.hand + i)) for i in range(1 + self.rules.visible_nexts)]
-        p.snapshots.append(
-            {"t": t, "field": f.to_json(), "erase": list(erase), "label": label, "hand": p.hand, "pairs": nexts,
-             "move": move}
-        )
+        snap = {"t": t, "field": f.to_json(), "erase": list(erase), "label": label, "hand": p.hand, "pairs": nexts,
+                "move": move}
+        if moving:
+            snap["moving"] = moving
+        p.snapshots.append(snap)
 
     def _result(self, winner: int | None, reason: str, error: str | None = None) -> VersusResult:
         a, b = self.players
@@ -360,6 +377,7 @@ def format_matches(cfg: MatchConfig, rs: list[VersusResult]) -> str:
             f"送ったおじゃま 平均 {avg(lambda r: r.stats[i].sent):6.1f}  "
             f"受けたおじゃま 平均 {avg(lambda r: r.stats[i].received):5.1f}  "
             f"発火回数 平均 {avg(lambda r: r.stats[i].fires):4.1f}  "
+            f"操作 {sum(r.stats[i].op_frames for r in rs) / max(1, sum(r.hands[i] for r in rs)):.1f} f/手  "
             f"思考 {sum(r.think_ms[i] for r in rs) / max(1, sum(r.hands[i] for r in rs)):.1f} ms/手"
         )
 

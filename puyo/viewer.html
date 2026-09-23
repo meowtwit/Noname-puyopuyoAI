@@ -16,10 +16,12 @@
   h1 { font-size: 16px; margin: 0 0 4px; grid-column: 1 / -1; }
   .sub { color: var(--muted); font-size: 12px; grid-column: 1 / -1; margin-top: -12px; }
   .board { display: flex; gap: 12px; align-items: flex-start; }
-  .field { display: grid; grid-template-columns: repeat(6, 32px); grid-template-rows: repeat(13, 32px); gap: 2px;
+  .field { display: grid; grid-template-columns: repeat(6, 32px); grid-template-rows: repeat(14, 32px); gap: 2px;
            background: var(--panel); padding: 6px; border-radius: 8px; border: 1px solid var(--line); }
   .cell { border-radius: 50%; position: relative; }
   .cell.row13 { opacity: .45; }
+  .cell.row14 { opacity: .3; }
+  .cell.moving { box-shadow: 0 0 0 2px #fff; opacity: 1; }
   .cell.row13::after { content: ""; position: absolute; inset: 0; border-bottom: 1px dashed var(--line); border-radius: 0; }
   .cell.death { box-shadow: inset 0 0 0 2px #e8464b55; }
   .cell.death::before { content: "×"; position: absolute; inset: 0; display: grid; place-items: center; color: #e8464b88; font-weight: bold; }
@@ -66,6 +68,7 @@
     <div class="stats">
       <div class="stat"><div class="k">手数</div><div class="v" id="s-hand">-</div></div>
       <div class="stat"><div class="k">置き方</div><div class="v" id="s-move">-</div></div>
+      <div class="stat"><div class="k">操作（フレーム）</div><div class="v" id="s-keys">-</div></div>
       <div class="stat"><div class="k">この手の連鎖 / 得点</div><div class="v" id="s-chain">-</div></div>
       <div class="stat"><div class="k">累計得点</div><div class="v" id="s-total">-</div></div>
       <div class="stat"><div class="k">思考時間</div><div class="v" id="s-think">-</div></div>
@@ -93,11 +96,13 @@ let R = null, frames = [], idx = 0, timer = null;
 const $ = (id) => document.getElementById(id);
 const fieldEl = $("field");
 const cells = {};
-for (let y = 13; y >= 1; y--) for (let x = 1; x <= 6; x++) {
+const rowClass = (y) => (y === 14 ? " row14" : y === 13 ? " row13" : "");
+for (let y = 14; y >= 1; y--) for (let x = 1; x <= 6; x++) {
   const d = document.createElement("div");
-  d.className = "cell" + (y === 13 ? " row13" : "") + (x === 3 && y === 12 ? " death" : "");
+  d.className = "cell" + rowClass(y) + (x === 3 && y === 12 ? " death" : "");
   fieldEl.appendChild(d); cells[x + "," + y] = d;
 }
+const DX = [0, 1, 0, -1], DY = [1, 0, -1, 0];
 
 function pairEl(el, pair) {
   el.innerHTML = "";
@@ -128,9 +133,9 @@ function render() {
   const fr = frames[idx], st = R.steps[fr.h];
   const erase = new Set(fr.erase.map(([x, y]) => x + "," + y));
   const placedSet = new Set();
-  if (fr.i === 0) {
+  if (fr.label === "設置") {
     const m = st.move, cx = m.x + (m.rot === 1 ? 1 : m.rot === 3 ? -1 : 0);
-    const col = (x) => fr.field[x - 1].length;
+    const col = (x) => fr.field[x - 1].replace(/\.+.$/, "").length;
     if (m.rot === 0 || m.rot === 2) { placedSet.add(`${m.x},${col(m.x)}`); placedSet.add(`${m.x},${col(m.x) - 1}`); }
     else { placedSet.add(`${m.x},${col(m.x)}`); placedSet.add(`${cx},${col(cx)}`); }
   }
@@ -144,10 +149,11 @@ function render() {
   const total = R.steps.slice(0, fr.h + 1).reduce((a, s) => a + s.score, 0);
   $("s-hand").textContent = `${fr.h + 1} / ${R.steps.length}`;
   $("s-move").textContent = `${st.pair} ${st.move.str}`;
+  $("s-keys").textContent = st.keys ? `${st.keys} (${st.op_frames}f)` : "-";
   $("s-chain").textContent = st.chain ? `${st.chain} / ${st.score}` : "-";
   $("s-total").textContent = total;
   $("s-think").textContent = `${st.think_ms} ms`;
-  $("chainbig").textContent = fr.label.includes("連鎖") ? fr.label + "!" : (st.dead ? "窒息" : "");
+  $("chainbig").textContent = fr.label.includes("連鎖") ? fr.label + "!" : fr.moving ? "操作中" : (st.dead ? "窒息" : "");
   $("slider").value = idx;
   document.querySelectorAll("#hands span").forEach((s, h) => s.classList.toggle("cur", h === fr.h));
 }
