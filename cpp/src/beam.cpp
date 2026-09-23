@@ -24,7 +24,7 @@ struct TokopuyoValue : BeamValue {
         if (chains >= opt.fire) return 1e7 + score;
         return (endgame ? 1.0 : opt.small_fire) * ev.chain_value(chains, score);
     }
-    double leaf(double e, bool) const override { return endgame ? -1e6 + e * 1e-3 : e; }
+    double leaf(double e, bool, const Field&) const override { return endgame ? -1e6 + e * 1e-3 : e; }
 };
 
 }  // namespace
@@ -108,7 +108,7 @@ void BeamAI::search(const Field& root, const std::vector<Move>& legal, const std
                     continue;
                 }
                 double e = ev_.eval(s.field);
-                best[first] = std::max(best[first], value.leaf(e, last));
+                best[first] = std::max(best[first], value.leaf(e, last, s.field));
                 children.push_back({s.field, first, e});
             }
         }

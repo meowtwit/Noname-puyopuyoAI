@@ -52,6 +52,14 @@ struct VersusOptions {
     int crush_check = 1;
     int crush_until = 99;    // この手数（0 始まり）までしか潰さない（潰し最速なら小さくする）
     int counter_opp = 1;     // 打ち返しで、余った分から相手の返しを差し引くか
+    // 打ち返し探索の幅・ツモの推測数・深さの上限（0 ならビームと同じ）
+    int counter_width = 0;
+    int counter_samples = 0;
+    int counter_depth = 0;
+    // 降るまでの手数が counter_depth より長いときも打ち返し探索をし、読める範囲の終わりの盤面は
+    // 「その盤面の本線（後から撃てる量）× extend_discount − 来る量」で評価する。0 なら普段どおり組む
+    int extend = 0;
+    double extend_discount = 0.8;
     int harass = 1;          // ちょっかいをするか
     int harass_min = 12;     // ちょっかいで送る最小のおじゃま
     int harass_min_chain = 2;
@@ -74,7 +82,9 @@ struct VersusContext {
 
 class VersusAI {
 public:
-    VersusAI(VersusOptions opt, uint64_t seed) : opt_(opt), beam_(opt.beam, seed) {}
+    VersusAI(VersusOptions opt, uint64_t seed)
+        : opt_(opt), beam_(opt.beam, seed), counter_beam_(counter_options(opt), seed ^ 0x5bd1e995) {}
+    static BeamOptions counter_options(const VersusOptions& o);
     // 対戦用の既定: 評価関数で「対応用の小連鎖を別に持つ形」を加点する
     static VersusOptions default_options();
 
@@ -93,6 +103,10 @@ public:
     std::tuple<int, double, int> crush_plan(const Field& field, const std::vector<Pair>& known,
                                             const std::array<int, 4>* remaining, const VersusContext& ctx,
                                             const Field& opponent);
+    // 打ち返し探索が各手に付けた値（デバッグ用、legal_moves の順）
+    std::vector<double> counter_values(const Field& field, const std::vector<Pair>& known,
+                                       const std::array<int, 4>* remaining, const VersusContext& ctx,
+                                       const Field& opponent, int depth);
     // 盤面に残る連鎖（色ぷよを 2 個まで足して起こせる最大の連鎖）のおじゃまの見込み
     static int residual_ojama(const Field& field);
     // 盤面の本線（色ぷよを 3 個まで足して起こせる、min_chain 連鎖以上の最大の連鎖）のおじゃまの見込み
@@ -101,6 +115,7 @@ public:
 private:
     VersusOptions opt_;
     BeamAI beam_;
+    BeamAI counter_beam_;  // 打ち返し探索用（幅・推測数を別に設定できる）
 };
 
 }  // namespace puyo

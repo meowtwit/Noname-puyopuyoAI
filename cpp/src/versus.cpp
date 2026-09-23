@@ -16,15 +16,24 @@ struct CounterValue : BeamValue {
     int incoming, carry;
     double w, residual;
     int opp_counter;
-    CounterValue(int in, int c, double w_, double r, int opp = 0)
-        : incoming(in), carry(c), w(w_), residual(r), opp_counter(opp) {}
+    double extend = 0;  // > 0 なら、読める範囲の終わりの盤面を「本線 × extend − 来る量」で評価する
+    CounterValue(int in, int c, double w_, double r, int opp = 0, double ext = 0)
+        : incoming(in), carry(c), w(w_), residual(r), opp_counter(opp), extend(ext) {}
     double fired(int, int score, const Field& after) const override {
         double v = (score + carry) / OJAMA_RATE - incoming;
         if (v > 0) v -= opp_counter;  // 余った分は相手の返しで相殺される
         if (residual > 0) v += residual * VersusAI::residual_ojama(after);
         return v * w;
     }
-    double leaf(double e, bool last) const override { return last ? -incoming * w + e * 0.01 : BEAM_NONE; }
+    double leaf(double e, bool last, const Field& field) const override {
+        if (!last) return BEAM_NONE;
+        if (extend > 0) {  // まだ降るまで手数がある: この盤面の本線を後から撃つ見込み
+            double v = extend * VersusAI::main_ojama(field, 2) - incoming;
+            if (v > 0) v -= opp_counter;
+            return v * w + e * 0.01;
+        }
+        return -incoming * w + e * 0.01;
+    }
 };
 
 // 潰し探索の値: 条件を満たす小連鎖を撃てたら送るおじゃま。それ以外は 0（形の良さを僅かに足す）
@@ -36,7 +45,7 @@ struct CrushValue : BeamValue {
         int o = (score + carry) / OJAMA_RATE;
         return chains <= max_chain && o >= min_ojama ? o * w : 0.0;
     }
-    double leaf(double e, bool) const override { return e * 1e-6; }
+    double leaf(double e, bool, const Field&) const override { return e * 1e-6; }
 };
 
 }  // namespace
@@ -64,6 +73,11 @@ VersusOptions VersusOptions::from_map(const std::map<std::string, double>& m) {
         else if (k == "crush_check") o.crush_check = static_cast<int>(v);
         else if (k == "crush_until") o.crush_until = static_cast<int>(v);
         else if (k == "counter_opp") o.counter_opp = static_cast<int>(v);
+        else if (k == "counter_width") o.counter_width = static_cast<int>(v);
+        else if (k == "counter_samples") o.counter_samples = static_cast<int>(v);
+        else if (k == "counter_depth") o.counter_depth = static_cast<int>(v);
+        else if (k == "extend") o.extend = static_cast<int>(v);
+        else if (k == "extend_discount") o.extend_discount = v;
         else if (k == "harass") o.harass = static_cast<int>(v);
         else if (k == "harass_min") o.harass_min = static_cast<int>(v);
         else if (k == "harass_min_chain") o.harass_min_chain = static_cast<int>(v);
@@ -100,6 +114,25 @@ std::tuple<int, double, int> VersusAI::crush_plan(const Field& field, const std:
     const int opp_window = (opt_.crush_max_chain * ctx.chain_frames + ctx.hand_frames - 1) / ctx.hand_frames + 1;
     return {static_cast<int>(arg), expect,
             opponent_counter(opponent, ctx.opp_pairs, opp_window, opt_.crush_check == 1)};
+}
+
+std::vector<double> VersusAI::counter_values(const Field& field, const std::vector<Pair>& known,
+                                            const std::array<int, 4>* remaining, const VersusContext& ctx,
+                                            const Field& opponent, int depth) {
+    std::vector<Move> legal = legal_moves(field, known.at(0));
+    const int opp = opt_.counter_opp ? counter_potential(opponent) : 0;
+    return counter_beam_.expected_values(field, legal, known, depth, remaining,
+                                         CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama, opt_.residual, opp,
+                                                      ctx.window > depth ? opt_.extend_discount : 0));
+}
+
+BeamOptions VersusAI::counter_options(const VersusOptions& o) {
+    BeamOptions b = o.beam;
+    b.eval.max_puyos = 0;  // 打ち返しでは残しておいた余白を使って伸ばす
+    if (o.counter_width > 0) b.width = o.counter_width;
+    if (o.counter_samples > 0) b.samples = o.counter_samples;
+    if (o.counter_depth > 0) b.depth = o.counter_depth;
+    return b;
 }
 
 int VersusAI::main_ojama(const Field& field, int min_chain) {
@@ -170,12 +203,14 @@ Move VersusAI::decide(const Field& field, const std::vector<Pair>& known, const 
         if (best >= 0) return legal[best];
     }
 
-    // 2. 打ち返し
-    if (ctx.incoming > opt_.accept && ctx.window >= 1 && ctx.window <= opt_.beam.depth) {
+    // 2. 打ち返し（降るまでの手数で「送り返す − 来る」が最大になる発火を探す）
+    const int cdepth = counter_beam_.options().depth;
+    if (ctx.incoming > opt_.accept && ctx.window >= 1 && (ctx.window <= cdepth || opt_.extend)) {
         const int opp = opt_.counter_opp ? counter_potential(opponent) : 0;
-        std::vector<double> v = beam_.expected_values(
-            field, legal, known, ctx.window, remaining,
-            CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama, opt_.residual, opp));
+        const bool beyond = ctx.window > cdepth;  // 読める範囲の後にもまだ手数がある
+        std::vector<double> v = counter_beam_.expected_values(
+            field, legal, known, std::min(ctx.window, cdepth), remaining,
+            CounterValue(ctx.incoming, ctx.carry, opt_.w_ojama, opt_.residual, opp, beyond ? opt_.extend_discount : 0));
         size_t arg = 0;
         for (size_t i = 1; i < legal.size(); ++i)
             if (v[i] > v[arg]) arg = i;

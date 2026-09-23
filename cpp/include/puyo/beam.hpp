@@ -36,7 +36,8 @@ struct BeamOptions {
 struct BeamValue {
     virtual ~BeamValue() = default;
     virtual double fired(int chains, int score, const Field& after) const = 0;  // 連鎖を撃った（after: 連鎖後）
-    virtual double leaf(double eval, bool last) const = 0;       // 撃っていない（last: 探索の最終手）
+    // 撃っていない（last: 探索の最終手、field: その盤面）
+    virtual double leaf(double eval, bool last, const Field& field) const = 0;
 };
 
 constexpr double BEAM_NONE = -1e9;  // その初手からは何も得られない（全滅など）

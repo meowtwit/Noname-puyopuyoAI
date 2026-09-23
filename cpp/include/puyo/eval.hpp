@@ -25,6 +25,9 @@ struct EvalOptions {
     int dual_max_chain = 4;
     double dual_keep = 0.8;
     int dual_cap = 30;
+    // 盤面のぷよが max_puyos 個を超えたら 1 個ごとに w_over を減点（相手の連鎖中に伸ばす余地を残すため）。0 なら使わない
+    int max_puyos = 0;
+    double w_over = 200;
 
     // 評価関数のオプションなら設定して true
     bool set(const std::string& key, double value);

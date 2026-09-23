@@ -152,6 +152,12 @@ PYBIND11_MODULE(_puyocpp, m) {
         .def("counter_potential", [](const VersusAI& ai, const std::vector<std::string>& opp_cols) {
             return ai.counter_potential(Field::from_cols(opp_cols));
         })
+        .def("counter_values", [](VersusAI& ai, const std::vector<std::string>& cols, const std::vector<std::string>& pairs,
+                                  int incoming, int window, int carry, const std::vector<std::string>& opp_cols, int depth) {
+            VersusContext ctx{incoming, window, carry, {}, 50, 60, 0};
+            return ai.counter_values(Field::from_cols(cols), parse_pairs(pairs), nullptr, ctx,
+                                     Field::from_cols(opp_cols), depth);
+        }, "デバッグ用: 打ち返し探索が各手（legal_moves の順）に付けた値")
         .def("crush_plan", [](VersusAI& ai, const std::vector<std::string>& cols, const std::vector<std::string>& pairs,
                               int carry, const std::vector<std::string>& opp_cols,
                               const std::vector<std::string>& opp_pairs) {

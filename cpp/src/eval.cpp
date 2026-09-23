@@ -21,6 +21,8 @@ bool EvalOptions::set(const std::string& k, double v) {
     else if (k == "dual_max_chain") dual_max_chain = static_cast<int>(v);
     else if (k == "dual_keep") dual_keep = v;
     else if (k == "dual_cap") dual_cap = static_cast<int>(v);
+    else if (k == "max_puyos") max_puyos = static_cast<int>(v);
+    else if (k == "w_over") w_over = v;
     else if (k == "conn2") conn2 = v;
     else if (k == "conn3") conn3 = v;
     else if (k == "w_shape") w_shape = v;
@@ -45,6 +47,7 @@ double Evaluator::trigger_value(const Field& field) const {
 double Evaluator::eval(const Field& field) const {
     double v = trigger_value(field) + shape(field);
     if (opt_.w_dual > 0) v += opt_.w_dual * dual_ojama(field);
+    if (opt_.max_puyos > 0) v -= opt_.w_over * std::max(0, field.count() - opt_.max_puyos);
     return v;
 }
 
